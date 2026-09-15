@@ -1,0 +1,1377 @@
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use eframe::egui::{
+    self, Color32, FontData, FontDefinitions, FontFamily, FontId, RichText, Stroke, TextStyle,
+    epaint::text::VariationCoords,
+};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+
+use crate::{
+    config::{AppPaths, PeerConfig, Settings},
+    network::{NetworkEvent, NetworkService},
+    vault,
+};
+
+const APP_BG: Color32 = Color32::from_rgb(244, 247, 251);
+const PAPER: Color32 = Color32::from_rgb(255, 255, 255);
+const SIDEBAR: Color32 = Color32::from_rgb(234, 240, 246);
+const INK: Color32 = Color32::from_rgb(24, 34, 48);
+const MUTED: Color32 = Color32::from_rgb(98, 108, 129);
+const BORDER: Color32 = Color32::from_rgb(220, 227, 236);
+const ACCENT: Color32 = Color32::from_rgb(50, 103, 227);
+const ACCENT_HOVER: Color32 = Color32::from_rgb(39, 86, 199);
+const SUCCESS: Color32 = Color32::from_rgb(35, 122, 87);
+const WARNING: Color32 = Color32::from_rgb(181, 71, 8);
+const SOFT_BLUE: Color32 = Color32::from_rgb(232, 239, 255);
+const SOFT_GREEN: Color32 = Color32::from_rgb(232, 246, 239);
+const SOFT_WARNING: Color32 = Color32::from_rgb(255, 243, 230);
+
+const INTER_MEDIUM: &str = "inter-medium";
+const INTER_SEMIBOLD: &str = "inter-semibold";
+const SOURCE_SERIF: &str = "source-serif";
+const SOURCE_SERIF_SEMIBOLD: &str = "source-serif-semibold";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusTone {
+    Neutral,
+    Active,
+    Success,
+    Warning,
+}
+
+pub struct NodusApp {
+    paths: AppPaths,
+    settings: Settings,
+    network: Option<NetworkService>,
+    notes: Vec<PathBuf>,
+    selected: Option<PathBuf>,
+    editor: String,
+    dirty: bool,
+    drafts: HashMap<PathBuf, String>,
+    loaded_modified_ms: u64,
+    last_scan: Instant,
+    pair_code: String,
+    endpoint_short: String,
+    pair_input: String,
+    pair_error: Option<String>,
+    incoming_pair_requests: VecDeque<(String, PeerConfig)>,
+    outgoing_pair_pending: Option<String>,
+    sync_status: String,
+    sync_tone: StatusTone,
+    preview: bool,
+    search: String,
+    pairing_expanded: bool,
+    save_feedback_until: Option<Instant>,
+    save_error: Option<String>,
+    close_dialog: bool,
+    allow_close: bool,
+    markdown_cache: CommonMarkCache,
+    fatal_error: Option<String>,
+}
+
+impl NodusApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_fonts(&cc.egui_ctx);
+        configure_style(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+
+        let initialized = (|| -> anyhow::Result<_> {
+            let paths = AppPaths::discover()?;
+            ensure_welcome_note(&paths.vault)?;
+            let settings = Settings::load_or_create(&paths.settings)?;
+            let network = NetworkService::start(
+                paths.vault.clone(),
+                settings.device_name.clone(),
+                settings.secret_key()?,
+                settings.pairing_token.clone(),
+                settings.peers.clone(),
+            );
+            Ok((paths, settings, network))
+        })();
+
+        match initialized {
+            Ok((paths, settings, network)) => {
+                let notes = vault::list_notes(&paths.vault);
+                let selected = notes.first().cloned();
+                let (editor, loaded_modified_ms) = selected
+                    .as_ref()
+                    .map(|path| {
+                        (
+                            fs::read_to_string(path).unwrap_or_default(),
+                            vault::modified_ms(path),
+                        )
+                    })
+                    .unwrap_or_default();
+                let pairing_expanded = settings.peers.is_empty();
+                Self {
+                    paths,
+                    settings,
+                    network: Some(network),
+                    notes,
+                    selected,
+                    editor,
+                    dirty: false,
+                    drafts: HashMap::new(),
+                    loaded_modified_ms,
+                    last_scan: Instant::now(),
+                    pair_code: String::new(),
+                    endpoint_short: "iniciando".to_owned(),
+                    pair_input: String::new(),
+                    pair_error: None,
+                    incoming_pair_requests: VecDeque::new(),
+                    outgoing_pair_pending: None,
+                    sync_status: "Preparando conexão".to_owned(),
+                    sync_tone: StatusTone::Neutral,
+                    preview: false,
+                    search: String::new(),
+                    pairing_expanded,
+                    save_feedback_until: None,
+                    save_error: None,
+                    close_dialog: false,
+                    allow_close: false,
+                    markdown_cache: CommonMarkCache::default(),
+                    fatal_error: None,
+                }
+            }
+            Err(error) => Self::failed(error.to_string()),
+        }
+    }
+
+    fn failed(message: String) -> Self {
+        let root = std::env::current_dir().unwrap_or_default();
+        Self {
+            paths: AppPaths {
+                vault: root.join("notes"),
+                settings: root.join("nodus-data/settings.json"),
+            },
+            settings: Settings {
+                device_name: String::new(),
+                secret_key: String::new(),
+                pairing_token: String::new(),
+                peers: vec![],
+            },
+            network: None,
+            notes: vec![],
+            selected: None,
+            editor: String::new(),
+            dirty: false,
+            drafts: HashMap::new(),
+            loaded_modified_ms: 0,
+            last_scan: Instant::now(),
+            pair_code: String::new(),
+            endpoint_short: String::new(),
+            pair_input: String::new(),
+            pair_error: None,
+            incoming_pair_requests: VecDeque::new(),
+            outgoing_pair_pending: None,
+            sync_status: String::new(),
+            sync_tone: StatusTone::Warning,
+            preview: false,
+            search: String::new(),
+            pairing_expanded: false,
+            save_feedback_until: None,
+            save_error: None,
+            close_dialog: false,
+            allow_close: false,
+            markdown_cache: CommonMarkCache::default(),
+            fatal_error: Some(message),
+        }
+    }
+
+    fn stash_current_draft(&mut self) {
+        if self.dirty
+            && let Some(path) = &self.selected
+        {
+            self.drafts.insert(path.clone(), self.editor.clone());
+        }
+    }
+
+    fn select_note(&mut self, path: PathBuf) {
+        if self.selected.as_ref() == Some(&path) {
+            return;
+        }
+        self.stash_current_draft();
+        if let Some(draft) = self.drafts.remove(&path) {
+            self.editor = draft;
+            self.dirty = true;
+        } else {
+            self.editor = fs::read_to_string(&path).unwrap_or_default();
+            self.dirty = false;
+        }
+        self.loaded_modified_ms = vault::modified_ms(&path);
+        self.selected = Some(path);
+        self.save_error = None;
+    }
+
+    fn new_note(&mut self) {
+        self.stash_current_draft();
+        let path = self.next_unsaved_note_path();
+        self.selected = Some(path.clone());
+        self.editor = "# Nova nota\n\n".to_owned();
+        self.dirty = true;
+        self.loaded_modified_ms = 0;
+        self.save_error = None;
+        if !self.notes.contains(&path) {
+            self.notes.push(path);
+        }
+    }
+
+    fn next_unsaved_note_path(&self) -> PathBuf {
+        for index in 1..10_000 {
+            let name = if index == 1 {
+                "Nova nota.md".to_owned()
+            } else {
+                format!("Nova nota {index}.md")
+            };
+            let candidate = self.paths.vault.join(name);
+            if !candidate.exists() && !self.notes.contains(&candidate) {
+                return candidate;
+            }
+        }
+        vault::unique_note_path(&self.paths.vault)
+    }
+
+    fn save_current_local(&mut self) -> bool {
+        self.save_error = None;
+        if !self.dirty {
+            return true;
+        }
+        let Some(path) = self.selected.clone() else {
+            return true;
+        };
+        match fs::write(&path, &self.editor) {
+            Ok(()) => {
+                self.loaded_modified_ms = vault::modified_ms(&path);
+                self.dirty = false;
+                self.drafts.remove(&path);
+                self.save_feedback_until = Some(Instant::now() + Duration::from_secs(2));
+                true
+            }
+            Err(error) => {
+                self.save_error = Some(format!("Não foi possível salvar: {error}"));
+                false
+            }
+        }
+    }
+
+    fn save_and_sync(&mut self) {
+        if !self.save_current_local() {
+            return;
+        }
+        if self.settings.peers.is_empty() {
+            self.sync_status = "Salva neste dispositivo".to_owned();
+            self.sync_tone = StatusTone::Success;
+        } else if let Some(network) = &self.network {
+            network.sync_now();
+            self.sync_status = "Salva. Iniciando sync".to_owned();
+            self.sync_tone = StatusTone::Active;
+        }
+        self.refresh_notes();
+    }
+
+    fn save_all_and_sync(&mut self) -> bool {
+        if !self.save_current_local() {
+            return false;
+        }
+        let pending: Vec<_> = self
+            .drafts
+            .iter()
+            .map(|(path, content)| (path.clone(), content.clone()))
+            .collect();
+        for (path, content) in pending {
+            if let Err(error) = fs::write(&path, content) {
+                self.save_error = Some(format!(
+                    "Não foi possível salvar {}: {error}",
+                    path.display()
+                ));
+                return false;
+            }
+            self.drafts.remove(&path);
+        }
+        if let Some(network) = &self.network {
+            network.sync_now();
+        }
+        true
+    }
+
+    fn unsaved_count(&self) -> usize {
+        self.drafts.len() + usize::from(self.dirty)
+    }
+
+    fn note_is_unsaved(&self, path: &Path) -> bool {
+        (self.dirty && self.selected.as_deref() == Some(path)) || self.drafts.contains_key(path)
+    }
+
+    fn refresh_notes(&mut self) {
+        let mut notes = vault::list_notes(&self.paths.vault);
+        for path in self.drafts.keys() {
+            if !notes.contains(path) {
+                notes.push(path.clone());
+            }
+        }
+        if self.dirty
+            && let Some(path) = &self.selected
+            && !notes.contains(path)
+        {
+            notes.push(path.clone());
+        }
+        notes.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+        self.notes = notes;
+
+        if !self.dirty
+            && let Some(selected) = &self.selected
+        {
+            let modified = vault::modified_ms(selected);
+            if modified != 0 && modified != self.loaded_modified_ms {
+                self.editor = fs::read_to_string(selected).unwrap_or_default();
+                self.loaded_modified_ms = modified;
+            }
+        }
+    }
+
+    fn poll_network(&mut self) {
+        let events: Vec<_> = self
+            .network
+            .as_ref()
+            .map(|network| network.events.try_iter().collect())
+            .unwrap_or_default();
+        for event in events {
+            match event {
+                NetworkEvent::Ready {
+                    pair_code,
+                    endpoint_id,
+                } => {
+                    self.pair_code = pair_code;
+                    self.endpoint_short = endpoint_id.chars().take(10).collect();
+                    self.sync_status = if self.settings.peers.is_empty() {
+                        "Pronto para conectar".to_owned()
+                    } else {
+                        "Pronto. Salve para sincronizar".to_owned()
+                    };
+                    self.sync_tone = StatusTone::Neutral;
+                }
+                NetworkEvent::Syncing { peer } => {
+                    self.sync_status = format!("Enviando para {peer}");
+                    self.sync_tone = StatusTone::Active;
+                }
+                NetworkEvent::Synced {
+                    peer,
+                    changed,
+                    direct,
+                } => {
+                    let route = match direct {
+                        Some(true) => "conexão direta",
+                        Some(false) => "relay criptografado",
+                        None => "conexão segura",
+                    };
+                    self.sync_status = if changed == 0 {
+                        format!("{peer} está em dia")
+                    } else {
+                        format!("{changed} alteração(ões) com {peer}")
+                    };
+                    self.sync_status.push_str(&format!(" via {route}"));
+                    self.sync_tone = StatusTone::Success;
+                    self.refresh_notes();
+                }
+                NetworkEvent::PairRequested { request_id, peer } => {
+                    if !self
+                        .incoming_pair_requests
+                        .iter()
+                        .any(|(known_id, _)| known_id == &request_id)
+                    {
+                        self.incoming_pair_requests
+                            .push_back((request_id, peer.clone()));
+                    }
+                    self.sync_status = format!("{} quer se conectar", peer.name);
+                    self.sync_tone = StatusTone::Active;
+                }
+                NetworkEvent::PairApproved {
+                    peer,
+                    initiate_sync,
+                } => {
+                    self.outgoing_pair_pending = None;
+                    if self.persist_peer(peer.clone()) {
+                        self.pair_input.clear();
+                        self.pairing_expanded = false;
+                        self.sync_status = format!("{} conectado com segurança", peer.name);
+                        self.sync_tone = StatusTone::Success;
+                        if initiate_sync && let Some(network) = &self.network {
+                            network.sync_now();
+                        }
+                    }
+                }
+                NetworkEvent::PairRejected { peer } => {
+                    self.outgoing_pair_pending = None;
+                    self.sync_status = format!("{peer} recusou a conexão");
+                    self.sync_tone = StatusTone::Warning;
+                }
+                NetworkEvent::PairRequestFinished { request_id } => {
+                    let previous_count = self.incoming_pair_requests.len();
+                    self.incoming_pair_requests
+                        .retain(|(known_id, _)| known_id != &request_id);
+                    if self.incoming_pair_requests.len() != previous_count {
+                        self.sync_status = "A solicitação de conexão expirou".to_owned();
+                        self.sync_tone = StatusTone::Warning;
+                    }
+                }
+                NetworkEvent::Error { peer, message } => {
+                    let pairing_error = message.contains("pareamento:");
+                    if pairing_error {
+                        self.outgoing_pair_pending = None;
+                    }
+                    if let Some(peer) = peer {
+                        self.sync_status = if pairing_error {
+                            format!("Não foi possível conectar a {peer}. Tente adicionar novamente")
+                        } else {
+                            format!("{peer} não respondeu. Salve para tentar de novo")
+                        };
+                    } else {
+                        self.sync_status = friendly_network_error(&message);
+                    }
+                    self.sync_tone = StatusTone::Warning;
+                }
+            }
+        }
+    }
+
+    fn add_peer(&mut self) {
+        self.pair_error = None;
+        match self.settings.parse_pair_code(&self.pair_input) {
+            Ok(invite) => {
+                let peer_name = invite.peer.name.clone();
+                if let Some(network) = &self.network {
+                    network.request_pair(invite);
+                }
+                self.outgoing_pair_pending = Some(peer_name.clone());
+                self.sync_status =
+                    format!("Pedido enviado a {peer_name}. Confirme no outro dispositivo");
+                self.sync_tone = StatusTone::Active;
+            }
+            Err(error) => self.pair_error = Some(error.to_string()),
+        }
+    }
+
+    fn persist_peer(&mut self, peer: PeerConfig) -> bool {
+        let inserted = self.settings.add_peer(peer.clone());
+        if inserted && let Err(error) = self.settings.save(&self.paths.settings) {
+            self.settings
+                .peers
+                .retain(|item| item.endpoint_id != peer.endpoint_id);
+            self.pair_error = Some(error.to_string());
+            self.sync_status = "Não foi possível salvar o novo dispositivo".to_owned();
+            self.sync_tone = StatusTone::Warning;
+            if let Some(network) = &self.network {
+                network.update_peers(self.settings.peers.clone());
+            }
+            return false;
+        }
+        if let Some(network) = &self.network {
+            network.update_peers(self.settings.peers.clone());
+        }
+        true
+    }
+
+    fn render_sidebar(&mut self, root_ui: &mut egui::Ui) {
+        egui::Panel::left("notes")
+            .exact_size(248.0)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(SIDEBAR)
+                    .inner_margin(egui::Margin::same(18)),
+            )
+            .show(root_ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Nodus").font(ui_semibold(21.0)).color(INK));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("local-first")
+                                .font(ui_regular(11.0))
+                                .color(MUTED),
+                        );
+                    });
+                });
+                ui.add_space(20.0);
+
+                if ui
+                    .add_sized(
+                        [212.0, 40.0],
+                        egui::Button::new(
+                            RichText::new("Nova nota")
+                                .font(ui_medium(14.0))
+                                .color(ACCENT),
+                        )
+                        .fill(PAPER)
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(171, 194, 244)))
+                        .corner_radius(8.0),
+                    )
+                    .on_hover_text("Criar uma nota Markdown")
+                    .clicked()
+                {
+                    self.new_note();
+                }
+
+                ui.add_space(14.0);
+                ui.add_sized(
+                    [212.0, 34.0],
+                    egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("Buscar notas")
+                        .font(ui_regular(13.0))
+                        .background_color(PAPER)
+                        .margin(egui::Margin::symmetric(10, 7)),
+                );
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new("Suas notas")
+                        .font(ui_medium(13.0))
+                        .color(MUTED),
+                );
+                ui.add_space(6.0);
+
+                let query = self.search.trim().to_lowercase();
+                let notes: Vec<_> = self
+                    .notes
+                    .iter()
+                    .filter(|path| {
+                        query.is_empty()
+                            || path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .is_some_and(|name| name.to_lowercase().contains(&query))
+                    })
+                    .cloned()
+                    .collect();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for path in notes {
+                        let selected = self.selected.as_ref() == Some(&path);
+                        let unsaved = self.note_is_unsaved(&path);
+                        let name = path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Nota");
+                        let label = if unsaved {
+                            format!("{name}  (não salva)")
+                        } else {
+                            name.to_owned()
+                        };
+                        let button = egui::Button::new(
+                            RichText::new(label)
+                                .font(if selected {
+                                    ui_medium(13.5)
+                                } else {
+                                    ui_regular(13.5)
+                                })
+                                .color(if selected { INK } else { MUTED }),
+                        )
+                        .fill(if selected {
+                            PAPER
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .stroke(if selected {
+                            Stroke::new(1.0, BORDER)
+                        } else {
+                            Stroke::NONE
+                        })
+                        .corner_radius(7.0);
+                        if ui.add_sized([212.0, 38.0], button).clicked() {
+                            self.select_note(path);
+                        }
+                    }
+                });
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.label(
+                        RichText::new(format!("{} nota(s) Markdown", self.notes.len()))
+                            .font(ui_regular(11.5))
+                            .color(MUTED),
+                    );
+                });
+            });
+    }
+
+    fn render_sync_panel(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = root_ui.ctx().clone();
+        egui::Panel::right("sync")
+            .exact_size(292.0)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(PAPER)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .inner_margin(egui::Margin::same(20)),
+            )
+            .show(root_ui, |ui| {
+                ui.label(RichText::new("Sync").font(ui_semibold(20.0)).color(INK));
+                ui.add_space(10.0);
+                let (status_bg, status_color) = match self.sync_tone {
+                    StatusTone::Neutral => (APP_BG, MUTED),
+                    StatusTone::Active => (SOFT_BLUE, ACCENT),
+                    StatusTone::Success => (SOFT_GREEN, SUCCESS),
+                    StatusTone::Warning => (SOFT_WARNING, WARNING),
+                };
+                egui::Frame::new()
+                    .fill(status_bg)
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(228.0);
+                        ui.label(
+                            RichText::new(&self.sync_status)
+                                .font(ui_medium(12.5))
+                                .color(status_color),
+                        );
+                    });
+
+                ui.add_space(22.0);
+                ui.label(
+                    RichText::new("Este dispositivo")
+                        .font(ui_medium(12.0))
+                        .color(MUTED),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(&self.settings.device_name)
+                        .font(ui_semibold(15.0))
+                        .color(INK),
+                );
+                ui.label(
+                    RichText::new(format!("ID {}", self.endpoint_short))
+                        .monospace()
+                        .size(10.5)
+                        .color(MUTED),
+                );
+
+                if !self.settings.peers.is_empty() {
+                    ui.add_space(22.0);
+                    ui.label(
+                        RichText::new("Dispositivos pareados")
+                            .font(ui_medium(12.0))
+                            .color(MUTED),
+                    );
+                    ui.add_space(6.0);
+                    for peer in &self.settings.peers {
+                        egui::Frame::new()
+                            .fill(APP_BG)
+                            .corner_radius(7.0)
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                ui.set_width(232.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(&peer.name).font(ui_medium(13.0)).color(INK),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new("Pareado")
+                                                    .font(ui_regular(10.5))
+                                                    .color(SUCCESS),
+                                            );
+                                        },
+                                    );
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+                }
+
+                ui.add_space(18.0);
+                let pairing_label = if self.pairing_expanded {
+                    "Ocultar pareamento"
+                } else if self.settings.peers.is_empty() {
+                    "Conectar primeiro dispositivo"
+                } else {
+                    "Conectar outro dispositivo"
+                };
+                if ui
+                    .add_sized(
+                        [250.0, 36.0],
+                        egui::Button::new(RichText::new(pairing_label).font(ui_medium(12.5)))
+                            .fill(if self.pairing_expanded {
+                                APP_BG
+                            } else {
+                                SOFT_BLUE
+                            })
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(7.0),
+                    )
+                    .clicked()
+                {
+                    self.pairing_expanded = !self.pairing_expanded;
+                }
+
+                if self.pairing_expanded {
+                    ui.add_space(14.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.label(
+                            RichText::new("Compartilhe seu código")
+                                .font(ui_semibold(13.0))
+                                .color(INK),
+                        );
+                        ui.label(
+                            RichText::new("Envie-o por um canal em que você confia.")
+                                .font(ui_regular(11.5))
+                                .color(MUTED),
+                        );
+                        ui.add_space(7.0);
+                        let mut shown_code = self.pair_code.clone();
+                        ui.add_sized(
+                            [250.0, 54.0],
+                            egui::TextEdit::multiline(&mut shown_code)
+                                .font(FontId::monospace(9.5))
+                                .interactive(false)
+                                .background_color(PAPER)
+                                .margin(egui::Margin::same(7)),
+                        );
+                        if ui
+                            .add_sized(
+                                [250.0, 32.0],
+                                egui::Button::new(
+                                    RichText::new("Copiar código").font(ui_medium(12.0)),
+                                ),
+                            )
+                            .clicked()
+                            && !self.pair_code.is_empty()
+                        {
+                            ctx.copy_text(self.pair_code.clone());
+                        }
+
+                        ui.add_space(14.0);
+                        ui.label(
+                            RichText::new("Cole o código da outra máquina")
+                                .font(ui_semibold(13.0))
+                                .color(INK),
+                        );
+                        ui.add_space(7.0);
+                        ui.add_sized(
+                            [250.0, 54.0],
+                            egui::TextEdit::multiline(&mut self.pair_input)
+                                .font(FontId::monospace(9.5))
+                                .hint_text("NODUS2...")
+                                .background_color(PAPER)
+                                .margin(egui::Margin::same(7)),
+                        );
+                        let enabled = !self.pair_input.trim().is_empty()
+                            && self.outgoing_pair_pending.is_none();
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                egui::Button::new(
+                                    RichText::new("Adicionar dispositivo")
+                                        .font(ui_medium(12.5))
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(ACCENT)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(7.0)
+                                .min_size([250.0, 36.0].into()),
+                            )
+                            .clicked()
+                        {
+                            self.add_peer();
+                        }
+                        if let Some(peer) = &self.outgoing_pair_pending {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("Aguardando confirmação em {peer}…"))
+                                    .font(ui_regular(11.5))
+                                    .color(ACCENT),
+                            );
+                        }
+                        if let Some(error) = &self.pair_error {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(error).font(ui_regular(11.0)).color(WARNING));
+                        }
+                    });
+                }
+            });
+    }
+
+    fn render_editor(&mut self, root_ui: &mut egui::Ui) {
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(APP_BG)
+                    .inner_margin(egui::Margin::symmetric(28, 22)),
+            )
+            .show(root_ui, |ui| {
+                ui.horizontal(|ui| {
+                    let title = self
+                        .selected
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Nenhuma nota");
+                    ui.label(RichText::new(title).font(ui_semibold(20.0)).color(INK));
+                    if self.dirty {
+                        ui.label(
+                            RichText::new("Não salva")
+                                .font(ui_medium(11.5))
+                                .color(WARNING)
+                                .background_color(SOFT_WARNING),
+                        );
+                    } else if self
+                        .save_feedback_until
+                        .is_some_and(|deadline| deadline > Instant::now())
+                    {
+                        ui.label(
+                            RichText::new("Salva")
+                                .font(ui_medium(11.5))
+                                .color(SUCCESS)
+                                .background_color(SOFT_GREEN),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let save = egui::Button::new(
+                            RichText::new("Salvar   Ctrl+S")
+                                .font(ui_medium(12.5))
+                                .color(Color32::WHITE),
+                        )
+                        .fill(ACCENT)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(7.0);
+                        if ui.add_sized([126.0, 34.0], save).clicked() {
+                            self.save_and_sync();
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .selectable_label(
+                                self.preview,
+                                RichText::new("Visualizar").font(ui_medium(12.5)),
+                            )
+                            .clicked()
+                        {
+                            self.preview = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                !self.preview,
+                                RichText::new("Editar").font(ui_medium(12.5)),
+                            )
+                            .clicked()
+                        {
+                            self.preview = false;
+                        }
+                    });
+                });
+                if let Some(error) = &self.save_error {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(WARNING));
+                }
+                ui.add_space(14.0);
+
+                let available = ui.available_size();
+                let page_width = available.x.min(860.0);
+                let side_space = ((available.x - page_width) / 2.0).max(0.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space(side_space);
+                    egui::Frame::new()
+                        .fill(PAPER)
+                        .stroke(Stroke::new(1.0, BORDER))
+                        .corner_radius(6.0)
+                        .shadow(egui::epaint::Shadow {
+                            offset: [0, 2],
+                            blur: 12,
+                            spread: 0,
+                            color: Color32::from_black_alpha(14),
+                        })
+                        .inner_margin(egui::Margin::symmetric(44, 34))
+                        .show(ui, |ui| {
+                            ui.set_width((page_width - 88.0).max(200.0));
+                            ui.set_min_height((available.y - 4.0).max(260.0));
+                            if self.preview {
+                                let implicit_uri = self
+                                    .selected
+                                    .as_ref()
+                                    .and_then(|path| path.parent())
+                                    .map(file_uri_prefix)
+                                    .unwrap_or_else(|| "file:///".to_owned());
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.style_mut()
+                                        .text_styles
+                                        .insert(TextStyle::Body, serif_regular(17.0));
+                                    ui.style_mut()
+                                        .text_styles
+                                        .insert(TextStyle::Heading, serif_semibold(27.0));
+                                    let response = CommonMarkViewer::new()
+                                        .indentation_spaces(2)
+                                        .max_image_width(Some(ui.available_width() as usize))
+                                        .default_width(Some(ui.available_width() as usize))
+                                        .default_implicit_uri_scheme(implicit_uri)
+                                        .show_mut(ui, &mut self.markdown_cache, &mut self.editor);
+                                    if response.response.changed() {
+                                        self.dirty = true;
+                                    }
+                                });
+                            } else {
+                                let response = ui.add_sized(
+                                    ui.available_size(),
+                                    egui::TextEdit::multiline(&mut self.editor)
+                                        .font(ui_regular(16.5))
+                                        .text_color(INK)
+                                        .background_color(PAPER)
+                                        .desired_width(f32::INFINITY)
+                                        .lock_focus(true)
+                                        .margin(egui::Margin::same(2)),
+                                );
+                                if response.changed() {
+                                    self.dirty = true;
+                                    self.save_feedback_until = None;
+                                }
+                            }
+                        });
+                });
+            });
+    }
+
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !self.allow_close
+            && ctx.input(|input| input.viewport().close_requested())
+            && self.unsaved_count() > 0
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_dialog = true;
+        }
+    }
+
+    fn render_close_dialog(&mut self, ctx: &egui::Context) {
+        if !self.close_dialog {
+            return;
+        }
+        let count = self.unsaved_count();
+        let frame = egui::Frame::new()
+            .fill(PAPER)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(24))
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 10],
+                blur: 36,
+                spread: 0,
+                color: Color32::from_black_alpha(45),
+            });
+        egui::Modal::new(egui::Id::new("unsaved-close"))
+            .frame(frame)
+            .backdrop_color(Color32::from_black_alpha(90))
+            .show(ctx, |ui| {
+                ui.set_width(430.0);
+                ui.label(
+                    RichText::new("Salvar antes de fechar?")
+                        .font(ui_semibold(20.0))
+                        .color(INK),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Você tem {count} {} não {}. Salve para manter suas alterações.",
+                        if count == 1 { "nota" } else { "notas" },
+                        if count == 1 { "salva" } else { "salvas" }
+                    ))
+                    .font(ui_regular(14.0))
+                    .color(MUTED),
+                );
+                if let Some(error) = &self.save_error {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(WARNING));
+                }
+                ui.add_space(20.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Salvar e fechar")
+                                    .font(ui_medium(13.0))
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(ACCENT)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(7.0),
+                        )
+                        .clicked()
+                        && self.save_all_and_sync()
+                    {
+                        self.allow_close = true;
+                        self.close_dialog = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui
+                        .button(RichText::new("Cancelar").font(ui_medium(13.0)))
+                        .clicked()
+                    {
+                        self.close_dialog = false;
+                    }
+                    if ui
+                        .button(
+                            RichText::new("Descartar alterações")
+                                .font(ui_medium(13.0))
+                                .color(WARNING),
+                        )
+                        .clicked()
+                    {
+                        self.drafts.clear();
+                        self.dirty = false;
+                        self.allow_close = true;
+                        self.close_dialog = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+    }
+
+    fn render_pair_request_dialog(&mut self, ctx: &egui::Context) {
+        let Some((request_id, peer)) = self.incoming_pair_requests.front().cloned() else {
+            return;
+        };
+        let frame = egui::Frame::new()
+            .fill(PAPER)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(24))
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 10],
+                blur: 36,
+                spread: 0,
+                color: Color32::from_black_alpha(45),
+            });
+        egui::Modal::new(egui::Id::new("incoming-pair-request"))
+            .frame(frame)
+            .backdrop_color(Color32::from_black_alpha(90))
+            .show(ctx, |ui| {
+                ui.set_width(430.0);
+                ui.label(
+                    RichText::new("Novo dispositivo quer se conectar")
+                        .font(ui_semibold(20.0))
+                        .color(INK),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{} solicitou acesso às notas deste dispositivo.",
+                        peer.name
+                    ))
+                    .font(ui_regular(14.0))
+                    .color(MUTED),
+                );
+                ui.add_space(10.0);
+                egui::Frame::new()
+                    .fill(APP_BG)
+                    .corner_radius(7.0)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "ID {}",
+                                peer.endpoint_id.chars().take(12).collect::<String>()
+                            ))
+                            .monospace()
+                            .size(11.0)
+                            .color(MUTED),
+                        );
+                    });
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(
+                        "Aceite apenas se você iniciou este pareamento no outro computador.",
+                    )
+                    .font(ui_regular(12.0))
+                    .color(MUTED),
+                );
+                ui.add_space(20.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Aceitar conexão")
+                                    .font(ui_medium(13.0))
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(ACCENT)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(7.0),
+                        )
+                        .clicked()
+                    {
+                        if let Some(network) = &self.network {
+                            network.answer_pair(request_id.clone(), true);
+                        }
+                        self.incoming_pair_requests.pop_front();
+                        self.sync_status = format!("Aceitando {}…", peer.name);
+                        self.sync_tone = StatusTone::Active;
+                    }
+                    if ui
+                        .button(RichText::new("Recusar").font(ui_medium(13.0)))
+                        .clicked()
+                    {
+                        if let Some(network) = &self.network {
+                            network.answer_pair(request_id.clone(), false);
+                        }
+                        self.incoming_pair_requests.pop_front();
+                        self.sync_status = format!("Conexão de {} recusada", peer.name);
+                        self.sync_tone = StatusTone::Neutral;
+                    }
+                });
+            });
+    }
+}
+
+impl eframe::App for NodusApp {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
+        self.poll_network();
+        self.handle_close_request(&ctx);
+        if self.last_scan.elapsed() >= Duration::from_millis(900) {
+            self.refresh_notes();
+            self.last_scan = Instant::now();
+        }
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::S,
+            ))
+        }) {
+            self.save_and_sync();
+        }
+
+        if let Some(error) = &self.fatal_error {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(APP_BG))
+                .show(root_ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(80.0);
+                        ui.label(
+                            RichText::new("Nodus não conseguiu iniciar")
+                                .font(ui_semibold(22.0))
+                                .color(INK),
+                        );
+                        ui.label(RichText::new(error).font(ui_regular(14.0)).color(WARNING));
+                    });
+                });
+            return;
+        }
+
+        self.render_sidebar(root_ui);
+        self.render_sync_panel(root_ui);
+        self.render_editor(root_ui);
+        self.render_pair_request_dialog(&ctx);
+        self.render_close_dialog(&ctx);
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    let inter = include_bytes!("../assets/fonts/InterVariable.ttf");
+    let source_serif = include_bytes!("../assets/fonts/SourceSerif4Variable-Roman.ttf");
+    let variable = |bytes: &'static [u8], weight: f32| {
+        let mut data = FontData::from_static(bytes);
+        data.tweak.coords = VariationCoords::new([(b"wght", weight)]);
+        Arc::new(data)
+    };
+
+    fonts
+        .font_data
+        .insert("inter".to_owned(), variable(inter, 400.0));
+    fonts
+        .font_data
+        .insert(INTER_MEDIUM.to_owned(), variable(inter, 500.0));
+    fonts
+        .font_data
+        .insert(INTER_SEMIBOLD.to_owned(), variable(inter, 620.0));
+    fonts
+        .font_data
+        .insert(SOURCE_SERIF.to_owned(), variable(source_serif, 400.0));
+    fonts.font_data.insert(
+        SOURCE_SERIF_SEMIBOLD.to_owned(),
+        variable(source_serif, 620.0),
+    );
+
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter".to_owned());
+    let proportional_fallbacks = fonts.families[&FontFamily::Proportional].clone();
+    for name in [INTER_MEDIUM, INTER_SEMIBOLD] {
+        let mut family = vec![name.to_owned()];
+        family.extend(proportional_fallbacks.iter().skip(1).cloned());
+        fonts.families.insert(FontFamily::Name(name.into()), family);
+    }
+    for name in [SOURCE_SERIF, SOURCE_SERIF_SEMIBOLD] {
+        let mut family = vec![name.to_owned()];
+        family.extend(proportional_fallbacks.iter().cloned());
+        fonts.families.insert(FontFamily::Name(name.into()), family);
+    }
+    ctx.set_fonts(fonts);
+}
+
+fn configure_style(ctx: &egui::Context) {
+    let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 8.0);
+    style.animation_time = 0.14;
+    style.visuals = egui::Visuals::light();
+    style.visuals.panel_fill = APP_BG;
+    style.visuals.window_fill = PAPER;
+    style.visuals.extreme_bg_color = PAPER;
+    style.visuals.faint_bg_color = APP_BG;
+    style.visuals.code_bg_color = Color32::from_rgb(238, 242, 247);
+    style.visuals.widgets.noninteractive.bg_fill = PAPER;
+    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(247, 249, 252);
+    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
+    style.visuals.widgets.hovered.bg_fill = SOFT_BLUE;
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(171, 194, 244));
+    style.visuals.widgets.active.bg_fill = ACCENT_HOVER;
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    style.visuals.selection.bg_fill = Color32::from_rgb(196, 214, 255);
+    style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    style.visuals.hyperlink_color = ACCENT;
+    style.visuals.override_text_color = Some(INK);
+    style.text_styles.insert(TextStyle::Body, ui_regular(14.0));
+    style.text_styles.insert(TextStyle::Button, ui_medium(13.5));
+    style
+        .text_styles
+        .insert(TextStyle::Heading, ui_semibold(22.0));
+    style.text_styles.insert(TextStyle::Small, ui_regular(11.5));
+    ctx.set_theme(egui::Theme::Light);
+    ctx.set_style_of(egui::Theme::Light, style);
+}
+
+fn ui_regular(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Proportional)
+}
+
+fn ui_medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(INTER_MEDIUM.into()))
+}
+
+fn ui_semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(INTER_SEMIBOLD.into()))
+}
+
+fn serif_regular(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(SOURCE_SERIF.into()))
+}
+
+fn serif_semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(SOURCE_SERIF_SEMIBOLD.into()))
+}
+
+fn file_uri_prefix(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    format!("file:///{normalized}/")
+}
+
+fn friendly_network_error(message: &str) -> String {
+    let lower = message.to_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        "A conexão demorou demais. Salve para tentar novamente".to_owned()
+    } else {
+        "A rede não está disponível agora. Sua nota continua salva".to_owned()
+    }
+}
+
+fn ensure_welcome_note(vault: &Path) -> anyhow::Result<()> {
+    let welcome = vault.join("Bem-vindo.md");
+    if !welcome.exists() {
+        fs::write(
+            welcome,
+            "# Bem-vindo ao Nodus\n\nEste arquivo é **Markdown puro** e fica na pasta `notes`.\n\n## Conectar e sincronizar\n\n1. Abra o Nodus nas duas máquinas.\n2. Cole o código do PC1 no PC2.\n3. Aceite a solicitação que aparecer no PC1.\n4. Edite esta nota e pressione `Ctrl+S`.\n\n- [x] Arquivos Markdown comuns\n- [x] Sync P2P criptografado\n- [x] Pareamento com aprovação\n- [ ] Sua próxima ideia\n\n> Depois do primeiro sync, o Nodus sincroniza novamente quando você salva.\n",
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app(vault: &Path) -> NodusApp {
+        let mut app = NodusApp::failed(String::new());
+        app.paths = AppPaths {
+            vault: vault.to_owned(),
+            settings: vault.join("settings.json"),
+        };
+        app.fatal_error = None;
+        app
+    }
+
+    #[test]
+    fn changing_notes_keeps_edits_as_unsaved_drafts() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("primeira.md");
+        let second = directory.path().join("segunda.md");
+        fs::write(&first, "# Primeira\n").unwrap();
+        fs::write(&second, "# Segunda\n").unwrap();
+
+        let mut app = test_app(directory.path());
+        app.selected = Some(first.clone());
+        app.editor = "# Primeira editada\n".to_owned();
+        app.dirty = true;
+
+        app.select_note(second.clone());
+        assert_eq!(app.editor, "# Segunda\n");
+        assert!(app.drafts.contains_key(&first));
+        assert_eq!(fs::read_to_string(&first).unwrap(), "# Primeira\n");
+
+        app.select_note(first);
+        assert_eq!(app.editor, "# Primeira editada\n");
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn save_all_persists_current_and_inactive_drafts() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("primeira.md");
+        let second = directory.path().join("segunda.md");
+        fs::write(&first, "antiga 1").unwrap();
+        fs::write(&second, "antiga 2").unwrap();
+
+        let mut app = test_app(directory.path());
+        app.selected = Some(first.clone());
+        app.editor = "nova 1".to_owned();
+        app.dirty = true;
+        app.drafts.insert(second.clone(), "nova 2".to_owned());
+
+        assert_eq!(app.unsaved_count(), 2);
+        assert!(app.save_all_and_sync());
+        assert_eq!(fs::read_to_string(first).unwrap(), "nova 1");
+        assert_eq!(fs::read_to_string(second).unwrap(), "nova 2");
+        assert_eq!(app.unsaved_count(), 0);
+    }
+
+    #[test]
+    fn configured_editor_theme_uses_a_light_text_field() {
+        let context = egui::Context::default();
+        configure_style(&context);
+
+        assert_eq!(context.theme(), egui::Theme::Light);
+        assert_eq!(context.global_style().visuals.text_edit_bg_color(), PAPER);
+    }
+
+    #[test]
+    fn approved_peer_is_persisted_for_future_syncs() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = test_app(directory.path());
+        let peer = PeerConfig {
+            name: "Notebook".to_owned(),
+            endpoint_id: "endpoint-test".to_owned(),
+            ticket: "ticket-test".to_owned(),
+        };
+
+        assert!(app.persist_peer(peer.clone()));
+        assert_eq!(app.settings.peers, vec![peer]);
+        let saved: Settings =
+            serde_json::from_slice(&fs::read(&app.paths.settings).unwrap()).unwrap();
+        assert_eq!(saved.peers, app.settings.peers);
+    }
+}

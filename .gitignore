@@ -1,0 +1,12 @@
+/target/
+/dist/
+/nodus-data/
+/notes/*.conflict-*.md
+
+# Windows / IDE / OS noise
+Thumbs.db
+Desktop.ini
+*.pdb
+.vscode/
+.idea/
+
