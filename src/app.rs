@@ -38,9 +38,17 @@ pub struct NodusApp {
     network: Option<NetworkService>,
     notes: Vec<PathBuf>,
     selected: Option<PathBuf>,
+    // `editor` is the mutable working buffer that the TextEdit in
+    // render_editor writes to. It mirrors the structured `blocks`
+    // representation, kept in sync at boundaries (load, save, refresh).
+    // Commit 3 of the block editor removes this field and switches to
+    // per-block rendering.
     editor: String,
     dirty: bool,
-    drafts: HashMap<PathBuf, String>,
+    drafts: HashMap<PathBuf, Vec<String>>,
+    blocks: Vec<String>,
+    active_block: Option<usize>,
+    slash_open: bool,
     loaded_modified_ms: u64,
     last_scan: Instant,
     pair_code: String,
@@ -87,11 +95,13 @@ impl NodusApp {
             Ok((paths, settings, network)) => {
                 let notes = vault::list_notes(&paths.vault);
                 let selected = notes.first().cloned();
-                let (editor, loaded_modified_ms) = selected
+                let (editor, blocks, loaded_modified_ms) = selected
                     .as_ref()
                     .map(|path| {
+                        let content = fs::read_to_string(path).unwrap_or_default();
                         (
-                            fs::read_to_string(path).unwrap_or_default(),
+                            content.clone(),
+                            blocks_from_content(&content),
                             vault::modified_ms(path),
                         )
                     })
@@ -104,6 +114,9 @@ impl NodusApp {
                     notes,
                     selected,
                     editor,
+                    blocks,
+                    active_block: None,
+                    slash_open: false,
                     dirty: false,
                     drafts: HashMap::new(),
                     loaded_modified_ms,
@@ -150,6 +163,9 @@ impl NodusApp {
             notes: vec![],
             selected: None,
             editor: String::new(),
+            blocks: Vec::new(),
+            active_block: None,
+            slash_open: false,
             dirty: false,
             drafts: HashMap::new(),
             loaded_modified_ms: 0,
@@ -179,7 +195,7 @@ impl NodusApp {
         if self.dirty
             && let Some(path) = &self.selected
         {
-            self.drafts.insert(path.clone(), self.editor.clone());
+            self.drafts.insert(path.clone(), self.blocks.clone());
         }
     }
 
@@ -189,12 +205,17 @@ impl NodusApp {
         }
         self.stash_current_draft();
         if let Some(draft) = self.drafts.remove(&path) {
-            self.editor = draft;
+            self.blocks = draft;
+            self.editor = content_from_blocks(&self.blocks);
             self.dirty = true;
         } else {
-            self.editor = fs::read_to_string(&path).unwrap_or_default();
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            self.editor = content;
+            self.blocks = blocks_from_content(&self.editor);
             self.dirty = false;
         }
+        self.active_block = None;
+        self.slash_open = false;
         self.loaded_modified_ms = vault::modified_ms(&path);
         self.selected = Some(path);
         self.save_error = None;
@@ -205,6 +226,9 @@ impl NodusApp {
         let path = self.next_unsaved_note_path();
         self.selected = Some(path.clone());
         self.editor = "# Nova nota\n\n".to_owned();
+        self.blocks = vec!["# Nova nota".to_string(), String::new()];
+        self.active_block = Some(0);
+        self.slash_open = false;
         self.dirty = true;
         self.loaded_modified_ms = 0;
         self.save_error = None;
@@ -236,8 +260,11 @@ impl NodusApp {
         let Some(path) = self.selected.clone() else {
             return true;
         };
-        match fs::write(&path, &self.editor) {
+        match fs::write(&path, self.editor.as_bytes()) {
             Ok(()) => {
+                // Sync blocks from the freshly-saved editor buffer so the
+                // structured form stays consistent with what's on disk.
+                self.blocks = blocks_from_content(&self.editor);
                 self.loaded_modified_ms = vault::modified_ms(&path);
                 self.dirty = false;
                 self.drafts.remove(&path);
@@ -273,10 +300,11 @@ impl NodusApp {
         let pending: Vec<_> = self
             .drafts
             .iter()
-            .map(|(path, content)| (path.clone(), content.clone()))
+            .map(|(path, blocks)| (path.clone(), blocks.clone()))
             .collect();
-        for (path, content) in pending {
-            if let Err(error) = fs::write(&path, content) {
+        for (path, blocks) in pending {
+            let content = content_from_blocks(&blocks);
+            if let Err(error) = fs::write(&path, content.as_bytes()) {
                 self.save_error = Some(format!(
                     "Não foi possível salvar {}: {error}",
                     path.display()
@@ -320,7 +348,11 @@ impl NodusApp {
         {
             let modified = vault::modified_ms(selected);
             if modified != 0 && modified != self.loaded_modified_ms {
-                self.editor = fs::read_to_string(selected).unwrap_or_default();
+                let content = fs::read_to_string(selected).unwrap_or_default();
+                self.editor = content;
+                self.blocks = blocks_from_content(&self.editor);
+                self.active_block = None;
+                self.slash_open = false;
                 self.loaded_modified_ms = modified;
             }
         }
@@ -1582,6 +1614,7 @@ mod tests {
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
         app.editor = "# Primeira editada\n".to_owned();
+        app.blocks = blocks_from_content(&app.editor);
         app.dirty = true;
 
         app.select_note(second.clone());
@@ -1599,19 +1632,20 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let first = directory.path().join("primeira.md");
         let second = directory.path().join("segunda.md");
-        fs::write(&first, "antiga 1").unwrap();
-        fs::write(&second, "antiga 2").unwrap();
+        fs::write(&first, "antiga 1\n").unwrap();
+        fs::write(&second, "antiga 2\n").unwrap();
 
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
-        app.editor = "nova 1".to_owned();
+        app.editor = "nova 1\n".to_owned();
+        app.blocks = blocks_from_content(&app.editor);
         app.dirty = true;
-        app.drafts.insert(second.clone(), "nova 2".to_owned());
+        app.drafts.insert(second.clone(), vec!["nova 2".to_string()]);
 
         assert_eq!(app.unsaved_count(), 2);
         assert!(app.save_all_and_sync());
-        assert_eq!(fs::read_to_string(first).unwrap(), "nova 1");
-        assert_eq!(fs::read_to_string(second).unwrap(), "nova 2");
+        assert_eq!(fs::read_to_string(first).unwrap(), "nova 1\n");
+        assert_eq!(fs::read_to_string(second).unwrap(), "nova 2\n");
         assert_eq!(app.unsaved_count(), 0);
     }
 
