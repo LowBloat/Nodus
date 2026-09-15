@@ -1524,6 +1524,28 @@ fn friendly_network_error(message: &str) -> String {
     }
 }
 
+/// Split a Markdown document into per-block sources. A "block" is a run of
+/// lines separated by blank lines (`\n\n`). Each block is trimmed; empty
+/// blocks (whitespace only) are dropped.
+fn blocks_from_content(content: &str) -> Vec<String> {
+    content
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Join per-block sources back into a Markdown document. The output ends
+/// with a single trailing newline so files always look "normal" on disk.
+fn content_from_blocks(blocks: &[String]) -> String {
+    if blocks.is_empty() {
+        String::new()
+    } else {
+        blocks.join("\n\n") + "\n"
+    }
+}
+
 fn ensure_welcome_note(vault: &Path) -> anyhow::Result<()> {
     let welcome = vault.join("Bem-vindo.md");
     if !welcome.exists() {
@@ -1620,5 +1642,59 @@ mod tests {
         let saved: Settings =
             serde_json::from_slice(&fs::read(&app.paths.settings).unwrap()).unwrap();
         assert_eq!(saved.peers, app.settings.peers);
+    }
+
+    #[test]
+    fn blocks_from_content_splits_on_blank_lines() {
+        let blocks = blocks_from_content("# Title\n\nparagraph\n\n- item");
+        assert_eq!(blocks, vec!["# Title", "paragraph", "- item"]);
+    }
+
+    #[test]
+    fn blocks_from_content_keeps_single_newlines_within_a_block() {
+        let blocks = blocks_from_content("- a\n- b\n- c\n\nnext paragraph");
+        assert_eq!(blocks, vec!["- a\n- b\n- c", "next paragraph"]);
+    }
+
+    #[test]
+    fn blocks_from_content_drops_blank_blocks_and_trims() {
+        let blocks = blocks_from_content("  \n\n  # Title  \n\n\n\n  \n  text  ");
+        assert_eq!(blocks, vec!["# Title", "text"]);
+    }
+
+    #[test]
+    fn blocks_from_content_keeps_a_fenced_code_block_intact() {
+        let blocks = blocks_from_content("intro\n\n```\nlet x = 1;\nlet y = 2;\n```\n\noutro");
+        assert_eq!(
+            blocks,
+            vec!["intro", "```\nlet x = 1;\nlet y = 2;\n```", "outro"]
+        );
+    }
+
+    #[test]
+    fn content_from_blocks_joins_with_blank_lines() {
+        let s = content_from_blocks(&["# Title".into(), "paragraph".into(), "- item".into()]);
+        assert_eq!(s, "# Title\n\nparagraph\n\n- item\n");
+    }
+
+    #[test]
+    fn content_from_blocks_empty_yields_empty_string() {
+        assert_eq!(content_from_blocks(&[]), "");
+    }
+
+    #[test]
+    fn round_trip_preserves_normal_documents() {
+        let original = "# Title\n\nparagraph\n\n- a\n- b\n- c\n\nmore text";
+        let blocks = blocks_from_content(original);
+        let restored = content_from_blocks(&blocks);
+        assert_eq!(restored.trim(), original.trim());
+    }
+
+    #[test]
+    fn round_trip_preserves_code_fence_blocks() {
+        let original = "intro\n\n```\nlet x = 1;\nlet y = 2;\n```\n\noutro";
+        let blocks = blocks_from_content(original);
+        let restored = content_from_blocks(&blocks);
+        assert_eq!(restored.trim(), original.trim());
     }
 }
