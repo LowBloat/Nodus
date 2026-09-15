@@ -1194,8 +1194,17 @@ impl NodusApp {
                     if response.has_focus()
                         && ui.ctx().input(|input| input.key_pressed(egui::Key::Escape))
                     {
-                        response.surrender_focus();
-                        new_active = None;
+                        if self.slash_open {
+                            // Esc with the slash menu open: strip the
+                            // leading `/` and any text up to the next
+                            // whitespace, then close the menu.
+                            self.blocks[idx] = strip_slash_trigger(&self.blocks[idx]);
+                            self.slash_open = false;
+                            self.dirty = true;
+                        } else {
+                            response.surrender_focus();
+                            new_active = None;
+                        }
                     }
                 } else {
                     // Render mode. Snapshot+restore styles so the markdown
@@ -1231,11 +1240,67 @@ impl NodusApp {
                 if idx + 1 < total {
                     ui.add_space(8.0);
                 }
+
+                // Slash menu sits right below its block. It only shows for
+                // the currently active block; the trigger is a leading `/`
+                // on that block (detected after the TextEdit has had a
+                // chance to mutate the buffer).
+                if self.active_block == Some(idx)
+                    && !self.slash_open
+                    && self.blocks[idx].starts_with('/')
+                {
+                    self.slash_open = true;
+                }
+                if self.slash_open && self.active_block == Some(idx) {
+                    self.render_slash_menu(ui, palette, idx);
+                }
             }
         });
 
+        // If the active block changed mid-iteration, the menu's anchor
+        // is gone; close it.
+        if self.slash_open && self.active_block.is_none() {
+            self.slash_open = false;
+        }
+
         self.active_block = new_active;
         self.pending_focus = pending_focus_block;
+    }
+
+    /// Render the slash menu as a horizontal button row directly below the
+    /// active block. Clicking an option replaces the leading `/` (and any
+    /// partial filter the user typed) with the option's Markdown prefix.
+    fn render_slash_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: theme::Palette,
+        block_idx: usize,
+    ) {
+        egui::Frame::new()
+            .fill(palette.soft_blue)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for (label, prefix) in SLASH_OPTIONS {
+                        let button = egui::Button::new(
+                            RichText::new(*label).font(ui_medium(12.5)).color(palette.accent),
+                        )
+                        .fill(palette.surface)
+                        .stroke(egui::Stroke::new(1.0, palette.border))
+                        .corner_radius(6.0);
+                        if ui.add(button).clicked() {
+                            self.blocks[block_idx] =
+                                apply_slash_choice(&self.blocks[block_idx], prefix);
+                            self.slash_open = false;
+                            self.dirty = true;
+                            self.save_feedback_until = None;
+                        }
+                    }
+                });
+            });
     }
 
     fn render_close_dialog(&mut self, ctx: &egui::Context, palette: theme::Palette) {
@@ -1547,6 +1612,52 @@ fn content_from_blocks(blocks: &[String]) -> String {
     }
 }
 
+/// Slash-menu options: (label shown to user, prefix injected into the block).
+/// Empty prefix means "remove the `/` and use the block as a plain paragraph".
+const SLASH_OPTIONS: &[(&str, &str)] = &[
+    ("Texto", ""),
+    ("Título 1", "# "),
+    ("Título 2", "## "),
+    ("Título 3", "### "),
+    ("Lista", "- "),
+    ("Numerada", "1. "),
+    ("Checklist", "- [ ] "),
+    ("Código", "```\n"),
+    ("Citação", "> "),
+    ("Divisor", "---"),
+];
+
+/// Inject a slash-menu selection into a block. The block is expected to
+/// start with `/`; we replace from the start through the first whitespace
+/// boundary with the chosen prefix, preserving any text the user already
+/// had after the slash.
+fn apply_slash_choice(block: &str, prefix: &str) -> String {
+    if !block.starts_with('/') {
+        return prefix.to_string();
+    }
+    let after_slash = &block[1..];
+    let filter_end = after_slash
+        .find(char::is_whitespace)
+        .unwrap_or(after_slash.len());
+    // Drop the separator whitespace so we don't end up with "###  rest".
+    let trailing = after_slash[filter_end..].trim_start();
+    format!("{prefix}{trailing}")
+}
+
+/// Inverse of `apply_slash_choice` for the Esc-on-open case: strip the
+/// leading `/` and any non-whitespace text after it, leaving any
+/// surrounding whitespace intact. When the block has no leading `/`,
+/// it is returned unchanged.
+fn strip_slash_trigger(block: &str) -> String {
+    let Some(after_slash) = block.strip_prefix('/') else {
+        return block.to_string();
+    };
+    let cut = after_slash
+        .find(char::is_whitespace)
+        .unwrap_or(after_slash.len());
+    after_slash[cut..].to_string()
+}
+
 fn ensure_welcome_note(vault: &Path) -> anyhow::Result<()> {
     let welcome = vault.join("Bem-vindo.md");
     if !welcome.exists() {
@@ -1697,5 +1808,27 @@ mod tests {
         let blocks = blocks_from_content(original);
         let restored = content_from_blocks(&blocks);
         assert_eq!(restored.trim(), original.trim());
+    }
+
+    #[test]
+    fn apply_slash_choice_replaces_just_the_trigger() {
+        assert_eq!(apply_slash_choice("/", "# "), "# ");
+        assert_eq!(apply_slash_choice("/he", "## "), "## ");
+        assert_eq!(apply_slash_choice("/h rest", "### "), "### rest");
+        assert_eq!(apply_slash_choice("/", ""), "");
+    }
+
+    #[test]
+    fn apply_slash_choice_is_a_noop_when_no_slash_trigger() {
+        assert_eq!(apply_slash_choice("hello", "# "), "# ");
+        assert_eq!(apply_slash_choice("", "- "), "- ");
+    }
+
+    #[test]
+    fn strip_slash_trigger_removes_only_the_trigger() {
+        assert_eq!(strip_slash_trigger("/"), "");
+        assert_eq!(strip_slash_trigger("/he"), "");
+        assert_eq!(strip_slash_trigger("/he rest"), " rest");
+        assert_eq!(strip_slash_trigger("hello"), "hello");
     }
 }
