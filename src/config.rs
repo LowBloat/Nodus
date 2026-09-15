@@ -92,14 +92,6 @@ pub enum ThemeMode {
     Dark,
 }
 
-/// Editor surface mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum EditorMode {
-    #[default]
-    Edit,
-    Preview,
-}
-
 /// UI state that survives across launches. Backwards-compatible defaults let
 /// old `settings.json` files (without this block) load without migration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,7 +101,6 @@ pub struct UiPrefs {
     pub sidebar_visible: bool,
     pub sidebar_width: f32,
     pub sync_panel_visible: bool,
-    pub editor_mode: EditorMode,
 }
 
 impl Default for UiPrefs {
@@ -119,7 +110,6 @@ impl Default for UiPrefs {
             sidebar_visible: true,
             sidebar_width: 248.0,
             sync_panel_visible: false,
-            editor_mode: EditorMode::Edit,
         }
     }
 }
@@ -354,7 +344,6 @@ mod tests {
         assert_eq!(settings.ui.theme, ThemeMode::System);
         assert!(settings.ui.sidebar_visible);
         assert!(!settings.ui.sync_panel_visible);
-        assert_eq!(settings.ui.editor_mode, EditorMode::Edit);
         assert!((settings.ui.sidebar_width - 248.0).abs() < f32::EPSILON);
     }
 }

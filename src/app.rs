@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
-    config::{AppPaths, EditorMode, PeerConfig, Settings, ThemeMode, UiPrefs},
+    config::{AppPaths, PeerConfig, Settings, ThemeMode, UiPrefs},
     network::{NetworkEvent, NetworkService},
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
@@ -38,16 +38,11 @@ pub struct NodusApp {
     network: Option<NetworkService>,
     notes: Vec<PathBuf>,
     selected: Option<PathBuf>,
-    // `editor` is the mutable working buffer that the TextEdit in
-    // render_editor writes to. It mirrors the structured `blocks`
-    // representation, kept in sync at boundaries (load, save, refresh).
-    // Commit 3 of the block editor removes this field and switches to
-    // per-block rendering.
-    editor: String,
     dirty: bool,
     drafts: HashMap<PathBuf, Vec<String>>,
     blocks: Vec<String>,
     active_block: Option<usize>,
+    pending_focus: Option<usize>,
     slash_open: bool,
     loaded_modified_ms: u64,
     last_scan: Instant,
@@ -95,12 +90,11 @@ impl NodusApp {
             Ok((paths, settings, network)) => {
                 let notes = vault::list_notes(&paths.vault);
                 let selected = notes.first().cloned();
-                let (editor, blocks, loaded_modified_ms) = selected
+                let (blocks, loaded_modified_ms) = selected
                     .as_ref()
                     .map(|path| {
                         let content = fs::read_to_string(path).unwrap_or_default();
                         (
-                            content.clone(),
                             blocks_from_content(&content),
                             vault::modified_ms(path),
                         )
@@ -113,9 +107,9 @@ impl NodusApp {
                     network: Some(network),
                     notes,
                     selected,
-                    editor,
                     blocks,
                     active_block: None,
+                    pending_focus: None,
                     slash_open: false,
                     dirty: false,
                     drafts: HashMap::new(),
@@ -162,9 +156,9 @@ impl NodusApp {
             network: None,
             notes: vec![],
             selected: None,
-            editor: String::new(),
             blocks: Vec::new(),
             active_block: None,
+            pending_focus: None,
             slash_open: false,
             dirty: false,
             drafts: HashMap::new(),
@@ -206,15 +200,14 @@ impl NodusApp {
         self.stash_current_draft();
         if let Some(draft) = self.drafts.remove(&path) {
             self.blocks = draft;
-            self.editor = content_from_blocks(&self.blocks);
             self.dirty = true;
         } else {
             let content = fs::read_to_string(&path).unwrap_or_default();
-            self.editor = content;
-            self.blocks = blocks_from_content(&self.editor);
+            self.blocks = blocks_from_content(&content);
             self.dirty = false;
         }
         self.active_block = None;
+        self.pending_focus = None;
         self.slash_open = false;
         self.loaded_modified_ms = vault::modified_ms(&path);
         self.selected = Some(path);
@@ -225,9 +218,9 @@ impl NodusApp {
         self.stash_current_draft();
         let path = self.next_unsaved_note_path();
         self.selected = Some(path.clone());
-        self.editor = "# Nova nota\n\n".to_owned();
         self.blocks = vec!["# Nova nota".to_string(), String::new()];
         self.active_block = Some(0);
+        self.pending_focus = Some(0);
         self.slash_open = false;
         self.dirty = true;
         self.loaded_modified_ms = 0;
@@ -260,11 +253,9 @@ impl NodusApp {
         let Some(path) = self.selected.clone() else {
             return true;
         };
-        match fs::write(&path, self.editor.as_bytes()) {
+        let content = content_from_blocks(&self.blocks);
+        match fs::write(&path, content.as_bytes()) {
             Ok(()) => {
-                // Sync blocks from the freshly-saved editor buffer so the
-                // structured form stays consistent with what's on disk.
-                self.blocks = blocks_from_content(&self.editor);
                 self.loaded_modified_ms = vault::modified_ms(&path);
                 self.dirty = false;
                 self.drafts.remove(&path);
@@ -349,9 +340,9 @@ impl NodusApp {
             let modified = vault::modified_ms(selected);
             if modified != 0 && modified != self.loaded_modified_ms {
                 let content = fs::read_to_string(selected).unwrap_or_default();
-                self.editor = content;
-                self.blocks = blocks_from_content(&self.editor);
+                self.blocks = blocks_from_content(&content);
                 self.active_block = None;
+                self.pending_focus = None;
                 self.slash_open = false;
                 self.loaded_modified_ms = modified;
             }
@@ -1108,42 +1099,6 @@ impl NodusApp {
                         {
                             self.save_and_sync();
                         }
-                        ui.add_space(8.0);
-                        // Edit / Preview pill toggle. Cleaner than the
-                        // previous two overlapping selectable_labels.
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let is_edit = self.settings.ui.editor_mode == EditorMode::Edit;
-                            let is_preview = self.settings.ui.editor_mode == EditorMode::Preview;
-                            let edit_btn = egui::Button::new(
-                                RichText::new("Editar").font(ui_medium(12.5)),
-                            )
-                            .fill(if is_edit { palette.soft_blue } else { Color32::TRANSPARENT })
-                            .stroke(Stroke::new(1.0, palette.border))
-                            .corner_radius(egui::CornerRadius {
-                                nw: 7,
-                                ne: 0,
-                                sw: 7,
-                                se: 0,
-                            });
-                            if ui.add_sized([80.0, 30.0], edit_btn).clicked() {
-                                self.settings.ui.editor_mode = EditorMode::Edit;
-                            }
-                            let preview_btn = egui::Button::new(
-                                RichText::new("Visualizar").font(ui_medium(12.5)),
-                            )
-                            .fill(if is_preview { palette.soft_blue } else { Color32::TRANSPARENT })
-                            .stroke(Stroke::new(1.0, palette.border))
-                            .corner_radius(egui::CornerRadius {
-                                nw: 0,
-                                ne: 7,
-                                sw: 0,
-                                se: 7,
-                            });
-                            if ui.add_sized([96.0, 30.0], preview_btn).clicked() {
-                                self.settings.ui.editor_mode = EditorMode::Preview;
-                            }
-                        });
                     });
                 });
                 if let Some(error) = &self.save_error {
@@ -1177,72 +1132,7 @@ impl NodusApp {
                                     .max(200.0),
                             );
                             ui.set_min_height((available.y - 4.0).max(260.0));
-                            if self.settings.ui.editor_mode == EditorMode::Preview {
-                                let implicit_uri = self
-                                    .selected
-                                    .as_ref()
-                                    .and_then(|path| path.parent())
-                                    .map(file_uri_prefix)
-                                    .unwrap_or_else(|| "file:///".to_owned());
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    // Save prior styles so the preview mutation
-                                    // doesn't leak out of this scope.
-                                    let prior_body =
-                                        ui.style().text_styles.get(&TextStyle::Body).cloned();
-                                    let prior_heading =
-                                        ui.style().text_styles.get(&TextStyle::Heading).cloned();
-                                    ui.style_mut()
-                                        .text_styles
-                                        .insert(TextStyle::Body, serif_regular(17.0));
-                                    ui.style_mut()
-                                        .text_styles
-                                        .insert(TextStyle::Heading, serif_semibold(27.0));
-                                    let response = CommonMarkViewer::new()
-                                        .indentation_spaces(2)
-                                        .max_image_width(Some(ui.available_width() as usize))
-                                        .default_width(Some(ui.available_width() as usize))
-                                        .default_implicit_uri_scheme(implicit_uri)
-                                        .show_mut(ui, &mut self.markdown_cache, &mut self.editor);
-                                    if response.response.changed() {
-                                        self.dirty = true;
-                                    }
-                                    let style = ui.style_mut();
-                                    if let Some(prior) = prior_body {
-                                        style.text_styles.insert(TextStyle::Body, prior);
-                                    }
-                                    if let Some(prior) = prior_heading {
-                                        style.text_styles.insert(TextStyle::Heading, prior);
-                                    }
-                                });
-                            } else {
-                                // No frame + no auto-focus: the editor surface
-                                // blends with the paper, and the only focus
-                                // indicator is the blinking caret. Click to
-                                // focus; Escape releases focus so the editor
-                                // stops stealing keystrokes (Ctrl+B, etc.).
-                                let editor_frame = egui::Frame::new()
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE)
-                                    .inner_margin(egui::Margin::same(2));
-                                let response = ui.add_sized(
-                                    ui.available_size(),
-                                    egui::TextEdit::multiline(&mut self.editor)
-                                        .font(ui_regular(16.5))
-                                        .text_color(palette.ink)
-                                        .desired_width(f32::INFINITY)
-                                        .frame(editor_frame)
-                                        .margin(egui::Margin::same(2)),
-                                );
-                                if response.changed() {
-                                    self.dirty = true;
-                                    self.save_feedback_until = None;
-                                }
-                                if response.has_focus()
-                                    && ui.ctx().input(|input| input.key_pressed(egui::Key::Escape))
-                                {
-                                    response.surrender_focus();
-                                }
-                            }
+                            self.render_blocks(ui, palette);
                         });
                 });
             });
@@ -1256,6 +1146,96 @@ impl NodusApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_dialog = true;
         }
+    }
+
+    /// Render each Markdown block independently. An active block gets a
+    /// transparent-framed TextEdit (click outside or Esc to deactivate);
+    /// every other block is rendered via egui_commonmark and is clickable
+    /// to become active.
+    fn render_blocks(&mut self, ui: &mut egui::Ui, palette: theme::Palette) {
+        let implicit_uri = self
+            .selected
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(file_uri_prefix)
+            .unwrap_or_else(|| "file:///".to_owned());
+
+        let total = self.blocks.len();
+        let mut new_active = self.active_block;
+        let mut pending_focus_block = self.pending_focus;
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for idx in 0..total {
+                let is_active = self.active_block == Some(idx);
+                let source = &mut self.blocks[idx];
+
+                if is_active {
+                    let editor_frame = egui::Frame::new()
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE)
+                        .inner_margin(egui::Margin::same(2));
+                    let response = ui.add_sized(
+                        egui::vec2(ui.available_width(), 0.0),
+                        egui::TextEdit::multiline(source)
+                            .font(ui_regular(16.5))
+                            .text_color(palette.ink)
+                            .desired_width(f32::INFINITY)
+                            .frame(editor_frame)
+                            .margin(egui::Margin::same(2)),
+                    );
+                    if response.changed() {
+                        self.dirty = true;
+                        self.save_feedback_until = None;
+                    }
+                    if pending_focus_block == Some(idx) {
+                        response.request_focus();
+                        pending_focus_block = None;
+                    }
+                    if response.has_focus()
+                        && ui.ctx().input(|input| input.key_pressed(egui::Key::Escape))
+                    {
+                        response.surrender_focus();
+                        new_active = None;
+                    }
+                } else {
+                    // Render mode. Snapshot+restore styles so the markdown
+                    // viewer's Body/Heading tweaks don't leak past this block.
+                    let prior_body = ui.style().text_styles.get(&TextStyle::Body).cloned();
+                    let prior_heading = ui.style().text_styles.get(&TextStyle::Heading).cloned();
+                    ui.style_mut()
+                        .text_styles
+                        .insert(TextStyle::Body, serif_regular(17.0));
+                    ui.style_mut()
+                        .text_styles
+                        .insert(TextStyle::Heading, serif_semibold(27.0));
+                    let response = CommonMarkViewer::new()
+                        .indentation_spaces(2)
+                        .max_image_width(Some(ui.available_width() as usize))
+                        .default_width(Some(ui.available_width() as usize))
+                        .default_implicit_uri_scheme(implicit_uri.clone())
+                        .show_mut(ui, &mut self.markdown_cache, source);
+                    let resp = response.response;
+                    if resp.clicked() {
+                        new_active = Some(idx);
+                        pending_focus_block = Some(idx);
+                    }
+                    let style = ui.style_mut();
+                    if let Some(prior) = prior_body {
+                        style.text_styles.insert(TextStyle::Body, prior);
+                    }
+                    if let Some(prior) = prior_heading {
+                        style.text_styles.insert(TextStyle::Heading, prior);
+                    }
+                }
+
+                if idx + 1 < total {
+                    ui.add_space(8.0);
+                }
+            }
+        });
+
+        self.active_block = new_active;
+        self.pending_focus = pending_focus_block;
     }
 
     fn render_close_dialog(&mut self, ctx: &egui::Context, palette: theme::Palette) {
@@ -1478,17 +1458,6 @@ impl eframe::App for NodusApp {
         if ctx.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
                 egui::Modifiers::CTRL,
-                egui::Key::E,
-            ))
-        }) {
-            self.settings.ui.editor_mode = match self.settings.ui.editor_mode {
-                EditorMode::Edit => EditorMode::Preview,
-                EditorMode::Preview => EditorMode::Edit,
-            };
-        }
-        if ctx.input_mut(|input| {
-            input.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::CTRL,
                 egui::Key::Slash,
             ))
         }) {
@@ -1613,17 +1582,16 @@ mod tests {
 
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
-        app.editor = "# Primeira editada\n".to_owned();
-        app.blocks = blocks_from_content(&app.editor);
+        app.blocks = vec!["# Primeira editada".to_string()];
         app.dirty = true;
 
         app.select_note(second.clone());
-        assert_eq!(app.editor, "# Segunda\n");
+        assert_eq!(app.blocks, vec!["# Segunda"]);
         assert!(app.drafts.contains_key(&first));
         assert_eq!(fs::read_to_string(&first).unwrap(), "# Primeira\n");
 
         app.select_note(first);
-        assert_eq!(app.editor, "# Primeira editada\n");
+        assert_eq!(app.blocks, vec!["# Primeira editada"]);
         assert!(app.dirty);
     }
 
@@ -1637,8 +1605,7 @@ mod tests {
 
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
-        app.editor = "nova 1\n".to_owned();
-        app.blocks = blocks_from_content(&app.editor);
+        app.blocks = vec!["nova 1".to_string()];
         app.dirty = true;
         app.drafts.insert(second.clone(), vec!["nova 2".to_string()]);
 
