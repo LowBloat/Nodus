@@ -1183,19 +1183,32 @@ impl NodusApp {
                                     }
                                 });
                             } else {
+                                // No frame + no auto-focus: the editor surface
+                                // blends with the paper, and the only focus
+                                // indicator is the blinking caret. Click to
+                                // focus; Escape releases focus so the editor
+                                // stops stealing keystrokes (Ctrl+B, etc.).
+                                let editor_frame = egui::Frame::new()
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .inner_margin(egui::Margin::same(2));
                                 let response = ui.add_sized(
                                     ui.available_size(),
                                     egui::TextEdit::multiline(&mut self.editor)
                                         .font(ui_regular(16.5))
                                         .text_color(palette.ink)
-                                        .background_color(palette.surface)
                                         .desired_width(f32::INFINITY)
-                                        .lock_focus(true)
+                                        .frame(editor_frame)
                                         .margin(egui::Margin::same(2)),
                                 );
                                 if response.changed() {
                                     self.dirty = true;
                                     self.save_feedback_until = None;
+                                }
+                                if response.has_focus()
+                                    && ui.ctx().input(|input| input.key_pressed(egui::Key::Escape))
+                                {
+                                    response.surrender_focus();
                                 }
                             }
                         });
