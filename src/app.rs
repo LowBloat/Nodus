@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
-    config::{AppPaths, PeerConfig, Settings, ThemeMode, UiPrefs},
+    config::{AppPaths, EditorMode, PeerConfig, Settings, ThemeMode, UiPrefs},
     network::{NetworkEvent, NetworkService},
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
@@ -65,7 +65,6 @@ pub struct NodusApp {
     outgoing_pair_pending: Option<String>,
     sync_status: String,
     sync_tone: StatusTone,
-    preview: bool,
     search: String,
     search_focus_request: bool,
     pairing_expanded: bool,
@@ -130,7 +129,6 @@ impl NodusApp {
                     outgoing_pair_pending: None,
                     sync_status: "Preparando conexão".to_owned(),
                     sync_tone: StatusTone::Neutral,
-                    preview: false,
                     search: String::new(),
                     search_focus_request: false,
                     pairing_expanded,
@@ -176,7 +174,6 @@ impl NodusApp {
             outgoing_pair_pending: None,
             sync_status: String::new(),
             sync_tone: StatusTone::Warning,
-            preview: false,
             search: String::new(),
             search_focus_request: false,
             pairing_expanded: false,
@@ -1062,7 +1059,7 @@ impl NodusApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let save = egui::Button::new(
-                            RichText::new("Salvar   Ctrl+S")
+                            RichText::new("Salvar")
                                 .font(ui_medium(12.5))
                                 .color(Color32::WHITE),
                         )
@@ -1073,24 +1070,41 @@ impl NodusApp {
                             self.save_and_sync();
                         }
                         ui.add_space(8.0);
-                        if ui
-                            .selectable_label(
-                                self.preview,
-                                RichText::new("Visualizar").font(ui_medium(12.5)),
-                            )
-                            .clicked()
-                        {
-                            self.preview = true;
-                        }
-                        if ui
-                            .selectable_label(
-                                !self.preview,
+                        // Edit / Preview pill toggle. Cleaner than the
+                        // previous two overlapping selectable_labels.
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let is_edit = self.settings.ui.editor_mode == EditorMode::Edit;
+                            let is_preview = self.settings.ui.editor_mode == EditorMode::Preview;
+                            let edit_btn = egui::Button::new(
                                 RichText::new("Editar").font(ui_medium(12.5)),
                             )
-                            .clicked()
-                        {
-                            self.preview = false;
-                        }
+                            .fill(if is_edit { SOFT_BLUE } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(egui::CornerRadius {
+                                nw: 7,
+                                ne: 0,
+                                sw: 7,
+                                se: 0,
+                            });
+                            if ui.add_sized([80.0, 30.0], edit_btn).clicked() {
+                                self.settings.ui.editor_mode = EditorMode::Edit;
+                            }
+                            let preview_btn = egui::Button::new(
+                                RichText::new("Visualizar").font(ui_medium(12.5)),
+                            )
+                            .fill(if is_preview { SOFT_BLUE } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(egui::CornerRadius {
+                                nw: 0,
+                                ne: 7,
+                                sw: 0,
+                                se: 7,
+                            });
+                            if ui.add_sized([96.0, 30.0], preview_btn).clicked() {
+                                self.settings.ui.editor_mode = EditorMode::Preview;
+                            }
+                        });
                     });
                 });
                 if let Some(error) = &self.save_error {
@@ -1118,7 +1132,7 @@ impl NodusApp {
                         .show(ui, |ui| {
                             ui.set_width((page_width - 88.0).max(200.0));
                             ui.set_min_height((available.y - 4.0).max(260.0));
-                            if self.preview {
+                            if self.settings.ui.editor_mode == EditorMode::Preview {
                                 let implicit_uri = self
                                     .selected
                                     .as_ref()
@@ -1126,6 +1140,12 @@ impl NodusApp {
                                     .map(file_uri_prefix)
                                     .unwrap_or_else(|| "file:///".to_owned());
                                 egui::ScrollArea::vertical().show(ui, |ui| {
+                                    // Save prior styles so the preview mutation
+                                    // doesn't leak out of this scope.
+                                    let prior_body =
+                                        ui.style().text_styles.get(&TextStyle::Body).cloned();
+                                    let prior_heading =
+                                        ui.style().text_styles.get(&TextStyle::Heading).cloned();
                                     ui.style_mut()
                                         .text_styles
                                         .insert(TextStyle::Body, serif_regular(17.0));
@@ -1140,6 +1160,13 @@ impl NodusApp {
                                         .show_mut(ui, &mut self.markdown_cache, &mut self.editor);
                                     if response.response.changed() {
                                         self.dirty = true;
+                                    }
+                                    let style = ui.style_mut();
+                                    if let Some(prior) = prior_body {
+                                        style.text_styles.insert(TextStyle::Body, prior);
+                                    }
+                                    if let Some(prior) = prior_heading {
+                                        style.text_styles.insert(TextStyle::Heading, prior);
                                     }
                                 });
                             } else {
@@ -1394,7 +1421,10 @@ impl eframe::App for NodusApp {
                 egui::Key::E,
             ))
         }) {
-            self.preview = !self.preview;
+            self.settings.ui.editor_mode = match self.settings.ui.editor_mode {
+                EditorMode::Edit => EditorMode::Preview,
+                EditorMode::Preview => EditorMode::Edit,
+            };
         }
         if ctx.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
