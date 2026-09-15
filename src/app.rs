@@ -1370,6 +1370,40 @@ impl eframe::App for NodusApp {
         }) {
             self.save_and_sync();
         }
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::B,
+            ))
+        }) {
+            self.settings.ui.sidebar_visible = !self.settings.ui.sidebar_visible;
+            self.save_ui_prefs();
+        }
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                egui::Key::P,
+            ))
+        }) {
+            self.settings.ui.sync_panel_visible = !self.settings.ui.sync_panel_visible;
+            self.save_ui_prefs();
+        }
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::E,
+            ))
+        }) {
+            self.preview = !self.preview;
+        }
+        if ctx.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::Slash,
+            ))
+        }) {
+            self.search_focus_request = true;
+        }
 
         if let Some(error) = &self.fatal_error {
             egui::CentralPanel::default()
