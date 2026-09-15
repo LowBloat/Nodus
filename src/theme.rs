@@ -27,6 +27,22 @@ pub const SOFT_BLUE: Color32 = Color32::from_rgb(232, 239, 255);
 pub const SOFT_GREEN: Color32 = Color32::from_rgb(232, 246, 239);
 pub const SOFT_WARNING: Color32 = Color32::from_rgb(255, 243, 230);
 
+// --- Dark mode palette --------------------------------------------------------
+
+pub const DARK_BG: Color32 = Color32::from_rgb(26, 29, 36);
+pub const DARK_SURFACE: Color32 = Color32::from_rgb(35, 39, 48);
+pub const DARK_SIDEBAR: Color32 = Color32::from_rgb(31, 34, 41);
+pub const DARK_INK: Color32 = Color32::from_rgb(230, 233, 239);
+pub const DARK_MUTED: Color32 = Color32::from_rgb(139, 148, 166);
+pub const DARK_BORDER: Color32 = Color32::from_rgb(46, 51, 64);
+pub const DARK_ACCENT: Color32 = Color32::from_rgb(111, 147, 255);
+pub const DARK_ACCENT_HOVER: Color32 = Color32::from_rgb(138, 170, 255);
+pub const DARK_SUCCESS: Color32 = Color32::from_rgb(92, 199, 143);
+pub const DARK_WARNING: Color32 = Color32::from_rgb(255, 154, 77);
+pub const DARK_SOFT_BLUE: Color32 = Color32::from_rgb(31, 42, 63);
+pub const DARK_SOFT_GREEN: Color32 = Color32::from_rgb(31, 53, 40);
+pub const DARK_SOFT_WARNING: Color32 = Color32::from_rgb(61, 40, 24);
+
 // --- Font family names (kept private; install_fonts and helpers use them) ------
 
 const INTER_MEDIUM: &str = "inter-medium";
@@ -81,32 +97,98 @@ impl Palette {
             dark: false,
         }
     }
+
+    pub fn dark() -> Self {
+        Self {
+            bg: DARK_BG,
+            surface: DARK_SURFACE,
+            sidebar: DARK_SIDEBAR,
+            ink: DARK_INK,
+            muted: DARK_MUTED,
+            border: DARK_BORDER,
+            accent: DARK_ACCENT,
+            accent_hover: DARK_ACCENT_HOVER,
+            success: DARK_SUCCESS,
+            warning: DARK_WARNING,
+            soft_blue: DARK_SOFT_BLUE,
+            soft_green: DARK_SOFT_GREEN,
+            soft_warning: DARK_SOFT_WARNING,
+            dark: true,
+        }
+    }
+}
+
+/// Resolve a `ThemeMode` to a concrete palette by consulting the OS preference
+/// when the mode is `System`.
+#[allow(dead_code)]
+pub fn current_palette(ctx: &egui::Context, mode: crate::config::ThemeMode) -> Palette {
+    use crate::config::ThemeMode as M;
+    match mode {
+        M::Light => Palette::light(),
+        M::Dark => Palette::dark(),
+        M::System => match ctx.system_theme() {
+            Some(egui::Theme::Dark) => Palette::dark(),
+            _ => Palette::light(),
+        },
+    }
 }
 
 // --- Style configuration --------------------------------------------------------
 
-/// Apply a palette to egui's `Visuals` and `TextStyle` slots. Mirrors the
-/// original `configure_style` behavior; no visual change at this commit.
+/// Apply a palette to egui's `Visuals` and `TextStyle` slots. Sets BOTH the
+/// light and dark styles so the OS-following `System` mode can flip without
+/// recomputing; the visible `set_theme` matches `palette.dark`.
 pub fn apply(ctx: &egui::Context, palette: &Palette) {
-    let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
+    let mut light = (*ctx.style_of(egui::Theme::Light)).clone();
+    configure_style(&mut light, &Palette::light());
+    ctx.set_style_of(egui::Theme::Light, light);
+
+    let mut dark = (*ctx.style_of(egui::Theme::Dark)).clone();
+    configure_style(&mut dark, &Palette::dark());
+    ctx.set_style_of(egui::Theme::Dark, dark);
+
+    ctx.set_theme(if palette.dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
+}
+
+fn configure_style(style: &mut egui::Style, palette: &Palette) {
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(12.0, 8.0);
     style.animation_time = 0.14;
-    style.visuals = egui::Visuals::light();
+    style.visuals = if palette.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     style.visuals.panel_fill = palette.bg;
     style.visuals.window_fill = palette.surface;
     style.visuals.extreme_bg_color = palette.surface;
     style.visuals.faint_bg_color = palette.bg;
-    style.visuals.code_bg_color = Color32::from_rgb(238, 242, 247);
+    style.visuals.code_bg_color = if palette.dark {
+        Color32::from_rgb(20, 24, 32)
+    } else {
+        Color32::from_rgb(238, 242, 247)
+    };
     style.visuals.widgets.noninteractive.bg_fill = palette.surface;
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(247, 249, 252);
+    style.visuals.widgets.inactive.bg_fill = if palette.dark {
+        palette.bg
+    } else {
+        Color32::from_rgb(247, 249, 252)
+    };
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.border);
     style.visuals.widgets.hovered.bg_fill = palette.soft_blue;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(171, 194, 244));
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.accent);
     style.visuals.widgets.active.bg_fill = palette.accent_hover;
     style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.accent);
-    style.visuals.selection.bg_fill = Color32::from_rgb(196, 214, 255);
+    style.visuals.selection.bg_fill = if palette.dark {
+        palette.soft_blue
+    } else {
+        Color32::from_rgb(196, 214, 255)
+    };
     style.visuals.selection.stroke = Stroke::new(1.0, palette.accent);
     style.visuals.hyperlink_color = palette.accent;
     style.visuals.override_text_color = Some(palette.ink);
@@ -114,8 +196,6 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     style.text_styles.insert(TextStyle::Button, ui_medium(13.5));
     style.text_styles.insert(TextStyle::Heading, ui_semibold(22.0));
     style.text_styles.insert(TextStyle::Small, ui_regular(11.5));
-    ctx.set_theme(egui::Theme::Light);
-    ctx.set_style_of(egui::Theme::Light, style);
 }
 
 // --- Font installation ---------------------------------------------------------

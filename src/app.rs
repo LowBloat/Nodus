@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
-    config::{AppPaths, PeerConfig, Settings, UiPrefs},
+    config::{AppPaths, PeerConfig, Settings, ThemeMode, UiPrefs},
     network::{NetworkEvent, NetworkService},
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
@@ -64,6 +64,7 @@ pub struct NodusApp {
     sync_tone: StatusTone,
     preview: bool,
     search: String,
+    search_focus_request: bool,
     pairing_expanded: bool,
     save_feedback_until: Option<Instant>,
     save_error: Option<String>,
@@ -128,6 +129,7 @@ impl NodusApp {
                     sync_tone: StatusTone::Neutral,
                     preview: false,
                     search: String::new(),
+                    search_focus_request: false,
                     pairing_expanded,
                     save_feedback_until: None,
                     save_error: None,
@@ -173,6 +175,7 @@ impl NodusApp {
             sync_tone: StatusTone::Warning,
             preview: false,
             search: String::new(),
+            search_focus_request: false,
             pairing_expanded: false,
             save_feedback_until: None,
             save_error: None,
@@ -484,6 +487,148 @@ impl NodusApp {
         }
     }
 
+    fn render_topbar(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = root_ui.ctx().clone();
+        let palette = theme::current_palette(&ctx, self.settings.ui.theme);
+        let sidebar_visible = self.settings.ui.sidebar_visible;
+
+        egui::Panel::top("topbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.bg)
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
+            )
+            .show(root_ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Left: reveal sidebar when hidden (dual toggle).
+                    if !sidebar_visible {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("›").font(ui_semibold(16.0)).color(palette.muted),
+                                )
+                                .frame(false)
+                                .fill(Color32::TRANSPARENT),
+                            )
+                            .on_hover_text("Mostrar sidebar (Ctrl+B)")
+                            .clicked()
+                        {
+                            self.settings.ui.sidebar_visible = true;
+                            self.save_ui_prefs();
+                        }
+                        ui.add_space(4.0);
+                    }
+
+                    // Vault name.
+                    ui.label(
+                        RichText::new(&self.settings.device_name)
+                            .font(ui_semibold(14.0))
+                            .color(palette.ink),
+                    );
+
+                    ui.add_space(20.0);
+
+                    // Search field — moved from the sidebar.
+                    let search_width = 280.0_f32.min(ui.available_width() * 0.4);
+                    let search_response = ui.add_sized(
+                        [search_width, 28.0],
+                        egui::TextEdit::singleline(&mut self.search)
+                            .hint_text("Buscar notas")
+                            .font(ui_regular(13.0))
+                            .background_color(palette.surface)
+                            .margin(egui::Margin::symmetric(10, 6)),
+                    );
+                    if self.search_focus_request {
+                        search_response.request_focus();
+                        self.search_focus_request = false;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Sync panel toggle.
+                        let sync_label = if self.settings.ui.sync_panel_visible {
+                            "Sync ✓"
+                        } else {
+                            "Sync"
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(sync_label)
+                                        .font(ui_medium(12.0))
+                                        .color(palette.ink),
+                                )
+                                .frame(false)
+                                .fill(Color32::TRANSPARENT),
+                            )
+                            .on_hover_text("Alternar painel de sincronização (Ctrl+Shift+P)")
+                            .clicked()
+                        {
+                            self.settings.ui.sync_panel_visible =
+                                !self.settings.ui.sync_panel_visible;
+                            self.save_ui_prefs();
+                        }
+
+                        ui.add_space(8.0);
+
+                        // Theme cycle button: Light → Dark → System → Light.
+                        let (theme_glyph, theme_tooltip) = match self.settings.ui.theme {
+                            ThemeMode::System => ("🖥", "Tema: seguir sistema — clique para claro"),
+                            ThemeMode::Light => ("☀", "Tema: claro — clique para escuro"),
+                            ThemeMode::Dark => ("🌙", "Tema: escuro — clique para seguir sistema"),
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(theme_glyph)
+                                        .font(ui_regular(15.0))
+                                        .color(palette.ink),
+                                )
+                                .frame(false)
+                                .fill(Color32::TRANSPARENT),
+                            )
+                            .on_hover_text(theme_tooltip)
+                            .clicked()
+                        {
+                            let next = match self.settings.ui.theme {
+                                ThemeMode::Light => ThemeMode::Dark,
+                                ThemeMode::Dark => ThemeMode::System,
+                                ThemeMode::System => ThemeMode::Light,
+                            };
+                            self.settings.ui.theme = next;
+                            let new_palette = theme::current_palette(&ctx, next);
+                            theme::apply(&ctx, &new_palette);
+                            self.save_ui_prefs();
+                        }
+
+                        ui.add_space(8.0);
+
+                        // Save indicator pill.
+                        let indicator_text = if self.dirty {
+                            Some(("● Não salvo", palette.warning, palette.soft_warning))
+                        } else if self
+                            .save_feedback_until
+                            .is_some_and(|deadline| deadline > Instant::now())
+                        {
+                            Some(("✓ Salvo", palette.success, palette.soft_green))
+                        } else {
+                            None
+                        };
+                        if let Some((text, fg, bg)) = indicator_text {
+                            egui::Frame::new()
+                                .fill(bg)
+                                .corner_radius(7.0)
+                                .inner_margin(egui::Margin::symmetric(8, 4))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(text).font(ui_medium(11.0)).color(fg),
+                                    );
+                                });
+                        }
+                    });
+                });
+            });
+    }
+
     fn render_sidebar(&mut self, root_ui: &mut egui::Ui) {
         let ctx = root_ui.ctx().clone();
         let sidebar_visible = self.settings.ui.sidebar_visible;
@@ -565,15 +710,6 @@ impl NodusApp {
                     },
                 );
 
-                ui.add_space(14.0);
-                ui.add_sized(
-                    [inner_width, 34.0],
-                    egui::TextEdit::singleline(&mut self.search)
-                        .hint_text("Buscar notas")
-                        .font(ui_regular(13.0))
-                        .background_color(PAPER)
-                        .margin(egui::Margin::symmetric(10, 7)),
-                );
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new("Suas notas")
@@ -1216,6 +1352,7 @@ impl eframe::App for NodusApp {
             return;
         }
 
+        self.render_topbar(root_ui);
         self.render_sidebar(root_ui);
         self.render_sync_panel(root_ui);
         self.render_editor(root_ui);
