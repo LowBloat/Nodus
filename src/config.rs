@@ -81,9 +81,10 @@ pub struct Settings {
 }
 
 /// How the app resolves which palette to use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeMode {
     /// Follow the operating system's preference.
+    #[default]
     System,
     /// Always light, regardless of OS.
     Light,
@@ -91,23 +92,12 @@ pub enum ThemeMode {
     Dark,
 }
 
-impl Default for ThemeMode {
-    fn default() -> Self {
-        ThemeMode::System
-    }
-}
-
 /// Editor surface mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum EditorMode {
+    #[default]
     Edit,
     Preview,
-}
-
-impl Default for EditorMode {
-    fn default() -> Self {
-        EditorMode::Edit
-    }
 }
 
 /// UI state that survives across launches. Backwards-compatible defaults let
