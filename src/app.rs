@@ -2,40 +2,22 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
-use eframe::egui::{
-    self, Color32, FontData, FontDefinitions, FontFamily, FontId, RichText, Stroke, TextStyle,
-    epaint::text::VariationCoords,
-};
+use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
     config::{AppPaths, PeerConfig, Settings},
     network::{NetworkEvent, NetworkService},
+    theme::{
+        self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
+        ACCENT, APP_BG, BORDER, INK, MUTED, PAPER, SIDEBAR, SOFT_BLUE, SOFT_GREEN, SOFT_WARNING,
+        SUCCESS, WARNING,
+    },
     vault,
 };
-
-const APP_BG: Color32 = Color32::from_rgb(244, 247, 251);
-const PAPER: Color32 = Color32::from_rgb(255, 255, 255);
-const SIDEBAR: Color32 = Color32::from_rgb(234, 240, 246);
-const INK: Color32 = Color32::from_rgb(24, 34, 48);
-const MUTED: Color32 = Color32::from_rgb(98, 108, 129);
-const BORDER: Color32 = Color32::from_rgb(220, 227, 236);
-const ACCENT: Color32 = Color32::from_rgb(50, 103, 227);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(39, 86, 199);
-const SUCCESS: Color32 = Color32::from_rgb(35, 122, 87);
-const WARNING: Color32 = Color32::from_rgb(181, 71, 8);
-const SOFT_BLUE: Color32 = Color32::from_rgb(232, 239, 255);
-const SOFT_GREEN: Color32 = Color32::from_rgb(232, 246, 239);
-const SOFT_WARNING: Color32 = Color32::from_rgb(255, 243, 230);
-
-const INTER_MEDIUM: &str = "inter-medium";
-const INTER_SEMIBOLD: &str = "inter-semibold";
-const SOURCE_SERIF: &str = "source-serif";
-const SOURCE_SERIF_SEMIBOLD: &str = "source-serif-semibold";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StatusTone {
@@ -78,7 +60,7 @@ pub struct NodusApp {
 impl NodusApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        configure_style(&cc.egui_ctx);
+        theme::apply(&cc.egui_ctx, &theme::Palette::light());
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let initialized = (|| -> anyhow::Result<_> {
@@ -1167,105 +1149,6 @@ impl eframe::App for NodusApp {
     }
 }
 
-fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    let inter = include_bytes!("../assets/fonts/InterVariable.ttf");
-    let source_serif = include_bytes!("../assets/fonts/SourceSerif4Variable-Roman.ttf");
-    let variable = |bytes: &'static [u8], weight: f32| {
-        let mut data = FontData::from_static(bytes);
-        data.tweak.coords = VariationCoords::new([(b"wght", weight)]);
-        Arc::new(data)
-    };
-
-    fonts
-        .font_data
-        .insert("inter".to_owned(), variable(inter, 400.0));
-    fonts
-        .font_data
-        .insert(INTER_MEDIUM.to_owned(), variable(inter, 500.0));
-    fonts
-        .font_data
-        .insert(INTER_SEMIBOLD.to_owned(), variable(inter, 620.0));
-    fonts
-        .font_data
-        .insert(SOURCE_SERIF.to_owned(), variable(source_serif, 400.0));
-    fonts.font_data.insert(
-        SOURCE_SERIF_SEMIBOLD.to_owned(),
-        variable(source_serif, 620.0),
-    );
-
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "inter".to_owned());
-    let proportional_fallbacks = fonts.families[&FontFamily::Proportional].clone();
-    for name in [INTER_MEDIUM, INTER_SEMIBOLD] {
-        let mut family = vec![name.to_owned()];
-        family.extend(proportional_fallbacks.iter().skip(1).cloned());
-        fonts.families.insert(FontFamily::Name(name.into()), family);
-    }
-    for name in [SOURCE_SERIF, SOURCE_SERIF_SEMIBOLD] {
-        let mut family = vec![name.to_owned()];
-        family.extend(proportional_fallbacks.iter().cloned());
-        fonts.families.insert(FontFamily::Name(name.into()), family);
-    }
-    ctx.set_fonts(fonts);
-}
-
-fn configure_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 8.0);
-    style.animation_time = 0.14;
-    style.visuals = egui::Visuals::light();
-    style.visuals.panel_fill = APP_BG;
-    style.visuals.window_fill = PAPER;
-    style.visuals.extreme_bg_color = PAPER;
-    style.visuals.faint_bg_color = APP_BG;
-    style.visuals.code_bg_color = Color32::from_rgb(238, 242, 247);
-    style.visuals.widgets.noninteractive.bg_fill = PAPER;
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(247, 249, 252);
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    style.visuals.widgets.hovered.bg_fill = SOFT_BLUE;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(171, 194, 244));
-    style.visuals.widgets.active.bg_fill = ACCENT_HOVER;
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    style.visuals.selection.bg_fill = Color32::from_rgb(196, 214, 255);
-    style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
-    style.visuals.hyperlink_color = ACCENT;
-    style.visuals.override_text_color = Some(INK);
-    style.text_styles.insert(TextStyle::Body, ui_regular(14.0));
-    style.text_styles.insert(TextStyle::Button, ui_medium(13.5));
-    style
-        .text_styles
-        .insert(TextStyle::Heading, ui_semibold(22.0));
-    style.text_styles.insert(TextStyle::Small, ui_regular(11.5));
-    ctx.set_theme(egui::Theme::Light);
-    ctx.set_style_of(egui::Theme::Light, style);
-}
-
-fn ui_regular(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Proportional)
-}
-
-fn ui_medium(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(INTER_MEDIUM.into()))
-}
-
-fn ui_semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(INTER_SEMIBOLD.into()))
-}
-
-fn serif_regular(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(SOURCE_SERIF.into()))
-}
-
-fn serif_semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(SOURCE_SERIF_SEMIBOLD.into()))
-}
-
 fn file_uri_prefix(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
     format!("file:///{normalized}/")
@@ -1352,7 +1235,7 @@ mod tests {
     #[test]
     fn configured_editor_theme_uses_a_light_text_field() {
         let context = egui::Context::default();
-        configure_style(&context);
+        theme::apply(&context, &theme::Palette::light());
 
         assert_eq!(context.theme(), egui::Theme::Light);
         assert_eq!(context.global_style().visuals.text_edit_bg_color(), PAPER);

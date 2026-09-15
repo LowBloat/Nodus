@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod network;
+mod theme;
 mod vault;
 
 use anyhow::Context;
