@@ -92,12 +92,25 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// The presentation mode of the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ViewMode {
+    /// Notion-like block editor with live typography and formatting.
+    #[default]
+    Notion,
+    /// Side-by-side: raw Markdown on the left, live rendered preview on the right.
+    Split,
+    /// Pure reading surface with rendered Markdown.
+    Preview,
+}
+
 /// UI state that survives across launches. Backwards-compatible defaults let
 /// old `settings.json` files (without this block) load without migration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
     pub theme: ThemeMode,
+    pub view_mode: ViewMode,
     pub sidebar_visible: bool,
     pub sidebar_width: f32,
     pub sync_panel_visible: bool,
@@ -107,6 +120,7 @@ impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             theme: ThemeMode::System,
+            view_mode: ViewMode::Notion,
             sidebar_visible: true,
             sidebar_width: 248.0,
             sync_panel_visible: false,
@@ -342,6 +356,7 @@ mod tests {
         let settings = Settings::load_or_create(&path).unwrap();
         assert_eq!(settings.ui, UiPrefs::default());
         assert_eq!(settings.ui.theme, ThemeMode::System);
+        assert_eq!(settings.ui.view_mode, ViewMode::Notion);
         assert!(settings.ui.sidebar_visible);
         assert!(!settings.ui.sync_panel_visible);
         assert!((settings.ui.sidebar_width - 248.0).abs() < f32::EPSILON);

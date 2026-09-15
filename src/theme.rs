@@ -118,6 +118,49 @@ impl Palette {
     }
 }
 
+#[cfg(windows)]
+pub fn is_windows_dark_mode() -> bool {
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn RegGetValueW(
+            hkey: isize,
+            lp_sub_key: *const u16,
+            lp_value: *const u16,
+            dw_flags: u32,
+            pdw_type: *mut u32,
+            pv_data: *mut u8,
+            pcb_data: *mut u32,
+        ) -> i32;
+    }
+
+    const HKEY_CURRENT_USER: isize = -2147483647i32 as isize; // 0x80000001
+    const RRF_RT_REG_DWORD: u32 = 0x00000010;
+
+    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
+        .encode_utf16()
+        .collect();
+    let value: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
+    let mut data: u32 = 1;
+    let mut size: u32 = 4;
+    let ret = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut data as *mut u32 as *mut u8,
+            &mut size,
+        )
+    };
+    ret == 0 && data == 0
+}
+
+#[cfg(not(windows))]
+pub fn is_windows_dark_mode() -> bool {
+    false
+}
+
 /// Resolve a `ThemeMode` to a concrete palette by consulting the OS preference
 /// when the mode is `System`.
 #[allow(dead_code)]
@@ -128,7 +171,14 @@ pub fn current_palette(ctx: &egui::Context, mode: crate::config::ThemeMode) -> P
         M::Dark => Palette::dark(),
         M::System => match ctx.system_theme() {
             Some(egui::Theme::Dark) => Palette::dark(),
-            _ => Palette::light(),
+            Some(egui::Theme::Light) => Palette::light(),
+            None => {
+                if is_windows_dark_mode() {
+                    Palette::dark()
+                } else {
+                    Palette::light()
+                }
+            }
         },
     }
 }
@@ -147,11 +197,12 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     configure_style(&mut dark, &Palette::dark());
     ctx.set_style_of(egui::Theme::Dark, dark);
 
-    ctx.set_theme(if palette.dark {
+    let theme = if palette.dark {
         egui::Theme::Dark
     } else {
         egui::Theme::Light
-    });
+    };
+    ctx.set_theme(theme);
 }
 
 fn configure_style(style: &mut egui::Style, palette: &Palette) {
@@ -174,16 +225,20 @@ fn configure_style(style: &mut egui::Style, palette: &Palette) {
     };
     style.visuals.widgets.noninteractive.bg_fill = palette.surface;
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.border);
+    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.ink);
     style.visuals.widgets.inactive.bg_fill = if palette.dark {
         palette.bg
     } else {
         Color32::from_rgb(247, 249, 252)
     };
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.border);
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.ink);
     style.visuals.widgets.hovered.bg_fill = palette.soft_blue;
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.accent);
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, palette.accent);
     style.visuals.widgets.active.bg_fill = palette.accent_hover;
     style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.accent);
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
     style.visuals.selection.bg_fill = if palette.dark {
         palette.soft_blue
     } else {
@@ -303,4 +358,52 @@ pub mod layout {
     pub const PAPER_INNER_PADDING: f32 = 44.0;
     /// Fixed width of the Save button in the editor header.
     pub const SAVE_BUTTON_WIDTH: f32 = 126.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn applying_dark_palette_sets_dark_theme_and_correct_ink() {
+        let ctx = egui::Context::default();
+        let dark_palette = Palette::dark();
+        apply(&ctx, &dark_palette);
+
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        let dark_style = ctx.style_of(egui::Theme::Dark);
+        assert_eq!(dark_style.visuals.override_text_color, Some(DARK_INK));
+        assert_eq!(dark_style.visuals.panel_fill, DARK_BG);
+        assert_eq!(dark_style.visuals.window_fill, DARK_SURFACE);
+    }
+
+    #[test]
+    fn applying_light_palette_sets_light_theme_and_correct_ink() {
+        let ctx = egui::Context::default();
+        let light_palette = Palette::light();
+        apply(&ctx, &light_palette);
+
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        let light_style = ctx.style_of(egui::Theme::Light);
+        assert_eq!(light_style.visuals.override_text_color, Some(INK));
+        assert_eq!(light_style.visuals.panel_fill, APP_BG);
+        assert_eq!(light_style.visuals.window_fill, PAPER);
+    }
+
+    #[test]
+    fn current_palette_resolves_correctly() {
+        let ctx = egui::Context::default();
+        assert!(!current_palette(&ctx, crate::config::ThemeMode::Light).dark);
+        assert!(current_palette(&ctx, crate::config::ThemeMode::Dark).dark);
+    }
+
+    #[test]
+    fn system_theme_falls_back_to_windows_dark_mode_detection() {
+        let ctx = egui::Context::default();
+        let palette = current_palette(&ctx, crate::config::ThemeMode::System);
+        if cfg!(windows) && is_windows_dark_mode() {
+            assert!(palette.dark);
+            assert_eq!(palette.ink, DARK_INK);
+        }
+    }
 }
