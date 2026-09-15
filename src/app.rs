@@ -13,8 +13,6 @@ use crate::{
     network::{NetworkEvent, NetworkService},
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
-        ACCENT, APP_BG, BORDER, INK, MUTED, PAPER, SIDEBAR, SOFT_BLUE, SOFT_GREEN, SOFT_WARNING,
-        SUCCESS, WARNING,
     },
     vault,
 };
@@ -484,9 +482,8 @@ impl NodusApp {
         self.last_toggle_at = Some(Instant::now());
     }
 
-    fn render_topbar(&mut self, root_ui: &mut egui::Ui) {
+    fn render_topbar(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         let ctx = root_ui.ctx().clone();
-        let palette = theme::current_palette(&ctx, self.settings.ui.theme);
         let sidebar_visible = self.settings.ui.sidebar_visible;
 
         egui::Panel::top("topbar")
@@ -628,7 +625,7 @@ impl NodusApp {
             });
     }
 
-    fn render_sidebar(&mut self, root_ui: &mut egui::Ui) {
+    fn render_sidebar(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         let ctx = root_ui.ctx().clone();
         let sidebar_visible = self.settings.ui.sidebar_visible;
         let target_width = if sidebar_visible {
@@ -653,17 +650,17 @@ impl NodusApp {
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(SIDEBAR)
+                    .fill(palette.sidebar)
                     .inner_margin(egui::Margin::same(theme::layout::SIDEBAR_MARGIN as i8)),
             )
             .show(root_ui, |ui| {
                 let inner_width = inner_width_for(width, theme::layout::SIDEBAR_MARGIN);
 
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Nodus").font(ui_semibold(21.0)).color(INK));
+                    ui.label(RichText::new("Nodus").font(ui_semibold(21.0)).color(palette.ink));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let chevron = egui::Button::new(
-                            RichText::new("‹").font(ui_semibold(16.0)).color(MUTED),
+                            RichText::new("‹").font(ui_semibold(16.0)).color(palette.muted),
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT);
@@ -680,7 +677,7 @@ impl NodusApp {
                         ui.label(
                             RichText::new("local-first")
                                 .font(ui_regular(11.0))
-                                .color(MUTED),
+                                .color(palette.muted),
                         );
                     });
                 });
@@ -696,9 +693,9 @@ impl NodusApp {
                                 egui::Button::new(
                                     RichText::new("Nova nota")
                                         .font(ui_medium(14.0))
-                                        .color(ACCENT),
+                                        .color(palette.accent),
                                 )
-                                .fill(PAPER)
+                                .fill(palette.surface)
                                 .stroke(Stroke::new(1.0, Color32::from_rgb(171, 194, 244)))
                                 .corner_radius(8.0),
                             )
@@ -714,7 +711,7 @@ impl NodusApp {
                 ui.label(
                     RichText::new("Suas notas")
                         .font(ui_medium(13.0))
-                        .color(MUTED),
+                        .color(palette.muted),
                 );
                 ui.add_space(6.0);
 
@@ -751,15 +748,15 @@ impl NodusApp {
                                 } else {
                                     ui_regular(13.5)
                                 })
-                                .color(if selected { INK } else { MUTED }),
+                                .color(if selected { palette.ink } else { palette.muted }),
                         )
                         .fill(if selected {
-                            PAPER
+                            palette.surface
                         } else {
                             Color32::TRANSPARENT
                         })
                         .stroke(if selected {
-                            Stroke::new(1.0, BORDER)
+                            Stroke::new(1.0, palette.border)
                         } else {
                             Stroke::NONE
                         })
@@ -774,7 +771,7 @@ impl NodusApp {
                     ui.label(
                         RichText::new(format!("{} nota(s) Markdown", self.notes.len()))
                             .font(ui_regular(11.5))
-                            .color(MUTED),
+                            .color(palette.muted),
                     );
                 });
             });
@@ -790,7 +787,7 @@ impl NodusApp {
         }
     }
 
-    fn render_sync_panel(&mut self, root_ui: &mut egui::Ui) {
+    fn render_sync_panel(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         let ctx = root_ui.ctx().clone();
         let sync_visible = self.settings.ui.sync_panel_visible;
         let target_width = if sync_visible { theme::layout::SYNC_WIDTH } else { 0.0 };
@@ -813,16 +810,16 @@ impl NodusApp {
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(PAPER)
-                    .stroke(Stroke::new(1.0, BORDER))
+                    .fill(palette.surface)
+                    .stroke(Stroke::new(1.0, palette.border))
                     .inner_margin(egui::Margin::same(theme::layout::SYNC_MARGIN as i8)),
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Sync").font(ui_semibold(20.0)).color(INK));
+                    ui.label(RichText::new("Sync").font(ui_semibold(20.0)).color(palette.ink));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let chevron = egui::Button::new(
-                            RichText::new("›").font(ui_semibold(16.0)).color(MUTED),
+                            RichText::new("›").font(ui_semibold(16.0)).color(palette.muted),
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT);
@@ -839,10 +836,10 @@ impl NodusApp {
                 });
                 ui.add_space(10.0);
                 let (status_bg, status_color) = match self.sync_tone {
-                    StatusTone::Neutral => (APP_BG, MUTED),
-                    StatusTone::Active => (SOFT_BLUE, ACCENT),
-                    StatusTone::Success => (SOFT_GREEN, SUCCESS),
-                    StatusTone::Warning => (SOFT_WARNING, WARNING),
+                    StatusTone::Neutral => (palette.bg, palette.muted),
+                    StatusTone::Active => (palette.soft_blue, palette.accent),
+                    StatusTone::Success => (palette.soft_green, palette.success),
+                    StatusTone::Warning => (palette.soft_warning, palette.warning),
                 };
                 egui::Frame::new()
                     .fill(status_bg)
@@ -861,19 +858,19 @@ impl NodusApp {
                 ui.label(
                     RichText::new("Este dispositivo")
                         .font(ui_medium(12.0))
-                        .color(MUTED),
+                        .color(palette.muted),
                 );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(&self.settings.device_name)
                         .font(ui_semibold(15.0))
-                        .color(INK),
+                        .color(palette.ink),
                 );
                 ui.label(
                     RichText::new(format!("ID {}", self.endpoint_short))
                         .monospace()
                         .size(10.5)
-                        .color(MUTED),
+                        .color(palette.muted),
                 );
 
                 if !self.settings.peers.is_empty() {
@@ -881,19 +878,19 @@ impl NodusApp {
                     ui.label(
                         RichText::new("Dispositivos pareados")
                             .font(ui_medium(12.0))
-                            .color(MUTED),
+                            .color(palette.muted),
                     );
                     ui.add_space(6.0);
                     for peer in &self.settings.peers {
                         egui::Frame::new()
-                            .fill(APP_BG)
+                            .fill(palette.bg)
                             .corner_radius(7.0)
                             .inner_margin(egui::Margin::symmetric(10, 8))
                             .show(ui, |ui| {
                                 ui.set_width(inner_width);
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        RichText::new(&peer.name).font(ui_medium(13.0)).color(INK),
+                                        RichText::new(&peer.name).font(ui_medium(13.0)).color(palette.ink),
                                     );
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
@@ -901,7 +898,7 @@ impl NodusApp {
                                             ui.label(
                                                 RichText::new("Pareado")
                                                     .font(ui_regular(10.5))
-                                                    .color(SUCCESS),
+                                                    .color(palette.success),
                                             );
                                         },
                                     );
@@ -924,11 +921,11 @@ impl NodusApp {
                         [inner_width, 36.0],
                         egui::Button::new(RichText::new(pairing_label).font(ui_medium(12.5)))
                             .fill(if self.pairing_expanded {
-                                APP_BG
+                                palette.bg
                             } else {
-                                SOFT_BLUE
+                                palette.soft_blue
                             })
-                            .stroke(Stroke::new(1.0, BORDER))
+                            .stroke(Stroke::new(1.0, palette.border))
                             .corner_radius(7.0),
                     )
                     .clicked()
@@ -942,12 +939,12 @@ impl NodusApp {
                         ui.label(
                             RichText::new("Compartilhe seu código")
                                 .font(ui_semibold(13.0))
-                                .color(INK),
+                                .color(palette.ink),
                         );
                         ui.label(
                             RichText::new("Envie-o por um canal em que você confia.")
                                 .font(ui_regular(11.5))
-                                .color(MUTED),
+                                .color(palette.muted),
                         );
                         ui.add_space(7.0);
                         let mut shown_code = self.pair_code.clone();
@@ -956,7 +953,7 @@ impl NodusApp {
                             egui::TextEdit::multiline(&mut shown_code)
                                 .font(FontId::monospace(9.5))
                                 .interactive(false)
-                                .background_color(PAPER)
+                                .background_color(palette.surface)
                                 .margin(egui::Margin::same(7)),
                         );
                         if ui
@@ -976,7 +973,7 @@ impl NodusApp {
                         ui.label(
                             RichText::new("Cole o código da outra máquina")
                                 .font(ui_semibold(13.0))
-                                .color(INK),
+                                .color(palette.ink),
                         );
                         ui.add_space(7.0);
                         ui.add_sized(
@@ -984,7 +981,7 @@ impl NodusApp {
                             egui::TextEdit::multiline(&mut self.pair_input)
                                 .font(FontId::monospace(9.5))
                                 .hint_text("NODUS2...")
-                                .background_color(PAPER)
+                                .background_color(palette.surface)
                                 .margin(egui::Margin::same(7)),
                         );
                         let enabled = !self.pair_input.trim().is_empty()
@@ -997,7 +994,7 @@ impl NodusApp {
                                         .font(ui_medium(12.5))
                                         .color(Color32::WHITE),
                                 )
-                                .fill(ACCENT)
+                                .fill(palette.accent)
                                 .stroke(Stroke::NONE)
                                 .corner_radius(7.0)
                                 .min_size([inner_width, 36.0].into()),
@@ -1011,23 +1008,23 @@ impl NodusApp {
                             ui.label(
                                 RichText::new(format!("Aguardando confirmação em {peer}…"))
                                     .font(ui_regular(11.5))
-                                    .color(ACCENT),
+                                    .color(palette.accent),
                             );
                         }
                         if let Some(error) = &self.pair_error {
                             ui.add_space(6.0);
-                            ui.label(RichText::new(error).font(ui_regular(11.0)).color(WARNING));
+                            ui.label(RichText::new(error).font(ui_regular(11.0)).color(palette.warning));
                         }
                     });
                 }
             });
     }
 
-    fn render_editor(&mut self, root_ui: &mut egui::Ui) {
+    fn render_editor(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(APP_BG)
+                    .fill(palette.bg)
                     .inner_margin(egui::Margin::symmetric(
                         theme::layout::PAPER_HORIZONTAL_MARGIN as i8,
                         theme::layout::PAPER_VERTICAL_MARGIN as i8,
@@ -1041,13 +1038,13 @@ impl NodusApp {
                         .and_then(|path| path.file_name())
                         .and_then(|value| value.to_str())
                         .unwrap_or("Nenhuma nota");
-                    ui.label(RichText::new(title).font(ui_semibold(20.0)).color(INK));
+                    ui.label(RichText::new(title).font(ui_semibold(20.0)).color(palette.ink));
                     if self.dirty {
                         ui.label(
                             RichText::new("Não salva")
                                 .font(ui_medium(11.5))
-                                .color(WARNING)
-                                .background_color(SOFT_WARNING),
+                                .color(palette.warning)
+                                .background_color(palette.soft_warning),
                         );
                     } else if self
                         .save_feedback_until
@@ -1056,8 +1053,8 @@ impl NodusApp {
                         ui.label(
                             RichText::new("Salva")
                                 .font(ui_medium(11.5))
-                                .color(SUCCESS)
-                                .background_color(SOFT_GREEN),
+                                .color(palette.success)
+                                .background_color(palette.soft_green),
                         );
                     }
 
@@ -1067,7 +1064,7 @@ impl NodusApp {
                                 .font(ui_medium(12.5))
                                 .color(Color32::WHITE),
                         )
-                        .fill(ACCENT)
+                        .fill(palette.accent)
                         .stroke(Stroke::NONE)
                         .corner_radius(7.0);
                         if ui
@@ -1089,8 +1086,8 @@ impl NodusApp {
                             let edit_btn = egui::Button::new(
                                 RichText::new("Editar").font(ui_medium(12.5)),
                             )
-                            .fill(if is_edit { SOFT_BLUE } else { Color32::TRANSPARENT })
-                            .stroke(Stroke::new(1.0, BORDER))
+                            .fill(if is_edit { palette.soft_blue } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::new(1.0, palette.border))
                             .corner_radius(egui::CornerRadius {
                                 nw: 7,
                                 ne: 0,
@@ -1103,8 +1100,8 @@ impl NodusApp {
                             let preview_btn = egui::Button::new(
                                 RichText::new("Visualizar").font(ui_medium(12.5)),
                             )
-                            .fill(if is_preview { SOFT_BLUE } else { Color32::TRANSPARENT })
-                            .stroke(Stroke::new(1.0, BORDER))
+                            .fill(if is_preview { palette.soft_blue } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::new(1.0, palette.border))
                             .corner_radius(egui::CornerRadius {
                                 nw: 0,
                                 ne: 7,
@@ -1119,7 +1116,7 @@ impl NodusApp {
                 });
                 if let Some(error) = &self.save_error {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(WARNING));
+                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(palette.warning));
                 }
                 ui.add_space(14.0);
 
@@ -1129,8 +1126,8 @@ impl NodusApp {
                 ui.horizontal_top(|ui| {
                     ui.add_space(side_space);
                     egui::Frame::new()
-                        .fill(PAPER)
-                        .stroke(Stroke::new(1.0, BORDER))
+                        .fill(palette.surface)
+                        .stroke(Stroke::new(1.0, palette.border))
                         .corner_radius(6.0)
                         .shadow(egui::epaint::Shadow {
                             offset: [0, 2],
@@ -1190,8 +1187,8 @@ impl NodusApp {
                                     ui.available_size(),
                                     egui::TextEdit::multiline(&mut self.editor)
                                         .font(ui_regular(16.5))
-                                        .text_color(INK)
-                                        .background_color(PAPER)
+                                        .text_color(palette.ink)
+                                        .background_color(palette.surface)
                                         .desired_width(f32::INFINITY)
                                         .lock_focus(true)
                                         .margin(egui::Margin::same(2)),
@@ -1216,14 +1213,14 @@ impl NodusApp {
         }
     }
 
-    fn render_close_dialog(&mut self, ctx: &egui::Context) {
+    fn render_close_dialog(&mut self, ctx: &egui::Context, palette: theme::Palette) {
         if !self.close_dialog {
             return;
         }
         let count = self.unsaved_count();
         let frame = egui::Frame::new()
-            .fill(PAPER)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
             .corner_radius(12.0)
             .inner_margin(egui::Margin::same(24))
             .shadow(egui::epaint::Shadow {
@@ -1240,7 +1237,7 @@ impl NodusApp {
                 ui.label(
                     RichText::new("Salvar antes de fechar?")
                         .font(ui_semibold(20.0))
-                        .color(INK),
+                        .color(palette.ink),
                 );
                 ui.add_space(8.0);
                 ui.label(
@@ -1250,11 +1247,11 @@ impl NodusApp {
                         if count == 1 { "salva" } else { "salvas" }
                     ))
                     .font(ui_regular(14.0))
-                    .color(MUTED),
+                    .color(palette.muted),
                 );
                 if let Some(error) = &self.save_error {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(WARNING));
+                    ui.label(RichText::new(error).font(ui_regular(12.0)).color(palette.warning));
                 }
                 ui.add_space(20.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1265,7 +1262,7 @@ impl NodusApp {
                                     .font(ui_medium(13.0))
                                     .color(Color32::WHITE),
                             )
-                            .fill(ACCENT)
+                            .fill(palette.accent)
                             .stroke(Stroke::NONE)
                             .corner_radius(7.0),
                         )
@@ -1286,7 +1283,7 @@ impl NodusApp {
                         .button(
                             RichText::new("Descartar alterações")
                                 .font(ui_medium(13.0))
-                                .color(WARNING),
+                                .color(palette.warning),
                         )
                         .clicked()
                     {
@@ -1300,13 +1297,13 @@ impl NodusApp {
             });
     }
 
-    fn render_pair_request_dialog(&mut self, ctx: &egui::Context) {
+    fn render_pair_request_dialog(&mut self, ctx: &egui::Context, palette: theme::Palette) {
         let Some((request_id, peer)) = self.incoming_pair_requests.front().cloned() else {
             return;
         };
         let frame = egui::Frame::new()
-            .fill(PAPER)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
             .corner_radius(12.0)
             .inner_margin(egui::Margin::same(24))
             .shadow(egui::epaint::Shadow {
@@ -1323,7 +1320,7 @@ impl NodusApp {
                 ui.label(
                     RichText::new("Novo dispositivo quer se conectar")
                         .font(ui_semibold(20.0))
-                        .color(INK),
+                        .color(palette.ink),
                 );
                 ui.add_space(8.0);
                 ui.label(
@@ -1332,11 +1329,11 @@ impl NodusApp {
                         peer.name
                     ))
                     .font(ui_regular(14.0))
-                    .color(MUTED),
+                    .color(palette.muted),
                 );
                 ui.add_space(10.0);
                 egui::Frame::new()
-                    .fill(APP_BG)
+                    .fill(palette.bg)
                     .corner_radius(7.0)
                     .inner_margin(egui::Margin::symmetric(12, 10))
                     .show(ui, |ui| {
@@ -1347,7 +1344,7 @@ impl NodusApp {
                             ))
                             .monospace()
                             .size(11.0)
-                            .color(MUTED),
+                            .color(palette.muted),
                         );
                     });
                 ui.add_space(10.0);
@@ -1356,7 +1353,7 @@ impl NodusApp {
                         "Aceite apenas se você iniciou este pareamento no outro computador.",
                     )
                     .font(ui_regular(12.0))
-                    .color(MUTED),
+                    .color(palette.muted),
                 );
                 ui.add_space(20.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1367,7 +1364,7 @@ impl NodusApp {
                                     .font(ui_medium(13.0))
                                     .color(Color32::WHITE),
                             )
-                            .fill(ACCENT)
+                            .fill(palette.accent)
                             .stroke(Stroke::NONE)
                             .corner_radius(7.0),
                         )
@@ -1454,28 +1451,30 @@ impl eframe::App for NodusApp {
         }
 
         if let Some(error) = &self.fatal_error {
+            let palette = theme::current_palette(&ctx, self.settings.ui.theme);
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(APP_BG))
+                .frame(egui::Frame::new().fill(palette.bg))
                 .show(root_ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(80.0);
                         ui.label(
                             RichText::new("Nodus não conseguiu iniciar")
                                 .font(ui_semibold(22.0))
-                                .color(INK),
+                                .color(palette.ink),
                         );
-                        ui.label(RichText::new(error).font(ui_regular(14.0)).color(WARNING));
+                        ui.label(RichText::new(error).font(ui_regular(14.0)).color(palette.warning));
                     });
                 });
             return;
         }
 
-        self.render_topbar(root_ui);
-        self.render_sidebar(root_ui);
-        self.render_sync_panel(root_ui);
-        self.render_editor(root_ui);
-        self.render_pair_request_dialog(&ctx);
-        self.render_close_dialog(&ctx);
+        let palette = theme::current_palette(&ctx, self.settings.ui.theme);
+        self.render_topbar(root_ui, palette);
+        self.render_sidebar(root_ui, palette);
+        self.render_sync_panel(root_ui, palette);
+        self.render_editor(root_ui, palette);
+        self.render_pair_request_dialog(&ctx, palette);
+        self.render_close_dialog(&ctx, palette);
 
         // Smart repaint: drive the event loop from actual activity instead of
         // an unconditional 4 fps tick. Idle keeps a slow 1s heartbeat so the
@@ -1587,7 +1586,10 @@ mod tests {
         theme::apply(&context, &theme::Palette::light());
 
         assert_eq!(context.theme(), egui::Theme::Light);
-        assert_eq!(context.global_style().visuals.text_edit_bg_color(), PAPER);
+        assert_eq!(
+            context.global_style().visuals.text_edit_bg_color(),
+            theme::Palette::light().surface
+        );
     }
 
     #[test]
