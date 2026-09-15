@@ -55,6 +55,7 @@ pub struct NodusApp {
     sync_tone: StatusTone,
     search: String,
     search_focus_request: bool,
+    last_toggle_at: Option<Instant>,
     pairing_expanded: bool,
     save_feedback_until: Option<Instant>,
     save_error: Option<String>,
@@ -119,6 +120,7 @@ impl NodusApp {
                     sync_tone: StatusTone::Neutral,
                     search: String::new(),
                     search_focus_request: false,
+                    last_toggle_at: None,
                     pairing_expanded,
                     save_feedback_until: None,
                     save_error: None,
@@ -164,6 +166,7 @@ impl NodusApp {
             sync_tone: StatusTone::Warning,
             search: String::new(),
             search_focus_request: false,
+            last_toggle_at: None,
             pairing_expanded: false,
             save_feedback_until: None,
             save_error: None,
@@ -475,6 +478,12 @@ impl NodusApp {
         }
     }
 
+    /// Mark that a sidebar/sync toggle just happened, so the smart repaint
+    /// keeps the animation frames coming for a short window.
+    fn note_panel_toggle(&mut self) {
+        self.last_toggle_at = Some(Instant::now());
+    }
+
     fn render_topbar(&mut self, root_ui: &mut egui::Ui) {
         let ctx = root_ui.ctx().clone();
         let palette = theme::current_palette(&ctx, self.settings.ui.theme);
@@ -502,6 +511,7 @@ impl NodusApp {
                             .clicked()
                         {
                             self.settings.ui.sidebar_visible = true;
+                            self.note_panel_toggle();
                             self.save_ui_prefs();
                         }
                         ui.add_space(4.0);
@@ -553,6 +563,7 @@ impl NodusApp {
                         {
                             self.settings.ui.sync_panel_visible =
                                 !self.settings.ui.sync_panel_visible;
+                            self.note_panel_toggle();
                             self.save_ui_prefs();
                         }
 
@@ -662,6 +673,7 @@ impl NodusApp {
                             .clicked()
                         {
                             self.settings.ui.sidebar_visible = false;
+                            self.note_panel_toggle();
                             self.save_ui_prefs();
                         }
                         ui.add_space(8.0);
@@ -820,6 +832,7 @@ impl NodusApp {
                             .clicked()
                         {
                             self.settings.ui.sync_panel_visible = false;
+                            self.note_panel_toggle();
                             self.save_ui_prefs();
                         }
                     });
@@ -1407,6 +1420,7 @@ impl eframe::App for NodusApp {
             ))
         }) {
             self.settings.ui.sidebar_visible = !self.settings.ui.sidebar_visible;
+            self.note_panel_toggle();
             self.save_ui_prefs();
         }
         if ctx.input_mut(|input| {
@@ -1416,6 +1430,7 @@ impl eframe::App for NodusApp {
             ))
         }) {
             self.settings.ui.sync_panel_visible = !self.settings.ui.sync_panel_visible;
+            self.note_panel_toggle();
             self.save_ui_prefs();
         }
         if ctx.input_mut(|input| {
@@ -1461,7 +1476,25 @@ impl eframe::App for NodusApp {
         self.render_editor(root_ui);
         self.render_pair_request_dialog(&ctx);
         self.render_close_dialog(&ctx);
-        ctx.request_repaint_after(Duration::from_millis(250));
+
+        // Smart repaint: drive the event loop from actual activity instead of
+        // an unconditional 4 fps tick. Idle keeps a slow 1s heartbeat so the
+        // network layer still wakes for incoming sync events.
+        let animation_window = Duration::from_millis(300);
+        let recently_toggled = self
+            .last_toggle_at
+            .is_some_and(|at| at.elapsed() < animation_window);
+        let needs_continuous = recently_toggled
+            || self.dirty
+            || self
+                .save_feedback_until
+                .is_some_and(|deadline| deadline > Instant::now())
+            || self.sync_tone == StatusTone::Active;
+        if needs_continuous {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
     }
 }
 
