@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
-    config::{AppPaths, PeerConfig, Settings},
+    config::{AppPaths, PeerConfig, Settings, UiPrefs},
     network::{NetworkEvent, NetworkService},
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
@@ -137,6 +137,7 @@ impl NodusApp {
                 secret_key: String::new(),
                 pairing_token: String::new(),
                 peers: vec![],
+                ui: UiPrefs::default(),
             },
             network: None,
             notes: vec![],

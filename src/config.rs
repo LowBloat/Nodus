@@ -76,6 +76,62 @@ pub struct Settings {
     pub pairing_token: String,
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
+    #[serde(default)]
+    pub ui: UiPrefs,
+}
+
+/// How the app resolves which palette to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    /// Follow the operating system's preference.
+    System,
+    /// Always light, regardless of OS.
+    Light,
+    /// Always dark, regardless of OS.
+    Dark,
+}
+
+impl Default for ThemeMode {
+    fn default() -> Self {
+        ThemeMode::System
+    }
+}
+
+/// Editor surface mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EditorMode {
+    Edit,
+    Preview,
+}
+
+impl Default for EditorMode {
+    fn default() -> Self {
+        EditorMode::Edit
+    }
+}
+
+/// UI state that survives across launches. Backwards-compatible defaults let
+/// old `settings.json` files (without this block) load without migration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiPrefs {
+    pub theme: ThemeMode,
+    pub sidebar_visible: bool,
+    pub sidebar_width: f32,
+    pub sync_panel_visible: bool,
+    pub editor_mode: EditorMode,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::System,
+            sidebar_visible: true,
+            sidebar_width: 248.0,
+            sync_panel_visible: false,
+            editor_mode: EditorMode::Edit,
+        }
+    }
 }
 
 impl Settings {
@@ -105,6 +161,7 @@ impl Settings {
             secret_key: URL_SAFE_NO_PAD.encode(secret),
             pairing_token: new_pairing_token(),
             peers: Vec::new(),
+            ui: UiPrefs::default(),
         };
         settings.save(path)?;
         Ok(settings)
@@ -277,9 +334,37 @@ mod tests {
             secret_key: URL_SAFE_NO_PAD.encode(own_secret.to_bytes()),
             pairing_token: new_pairing_token(),
             peers: vec![known_peer],
+            ui: UiPrefs::default(),
         };
 
         let invite = settings.parse_pair_code(&code).unwrap();
         assert_eq!(invite.peer.endpoint_id, peer_secret.public().to_string());
+    }
+
+    #[test]
+    fn settings_without_a_ui_block_load_with_backwards_compatible_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let secret = URL_SAFE_NO_PAD.encode([11_u8; 32]);
+        // Old format: no `ui` field at all.
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "device_name": "Dispositivo antigo",
+                "secret_key": secret,
+                "pairing_token": "token-antigo-com-mais-de-24-caracteres",
+                "peers": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let settings = Settings::load_or_create(&path).unwrap();
+        assert_eq!(settings.ui, UiPrefs::default());
+        assert_eq!(settings.ui.theme, ThemeMode::System);
+        assert!(settings.ui.sidebar_visible);
+        assert!(!settings.ui.sync_panel_visible);
+        assert_eq!(settings.ui.editor_mode, EditorMode::Edit);
+        assert!((settings.ui.sidebar_width - 248.0).abs() < f32::EPSILON);
     }
 }
