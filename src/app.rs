@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
+use eframe::egui::{self, Color32, FontId, RichText, Stroke};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::{
@@ -39,11 +39,12 @@ pub struct NodusApp {
     notes: Vec<PathBuf>,
     selected: Option<PathBuf>,
     dirty: bool,
-    drafts: HashMap<PathBuf, Vec<String>>,
-    blocks: Vec<String>,
+    drafts: HashMap<PathBuf, Vec<Block>>,
+    blocks: Vec<Block>,
     active_block: Option<usize>,
     pending_focus: Option<usize>,
     slash_open: bool,
+    slash_selected_index: usize,
     loaded_modified_ms: u64,
     last_scan: Instant,
     pair_code: String,
@@ -119,6 +120,7 @@ impl NodusApp {
             active_block: None,
             pending_focus: None,
             slash_open: false,
+            slash_selected_index: 0,
             dirty: false,
             drafts: HashMap::new(),
             loaded_modified_ms,
@@ -142,7 +144,7 @@ impl NodusApp {
             markdown_cache: CommonMarkCache::default(),
             fatal_error: None,
             full_editor_text,
-            applied_theme_is_dark: Some(initial_palette.dark),
+            applied_theme_is_dark: None,
         }
     }
 
@@ -169,6 +171,7 @@ impl NodusApp {
             active_block: None,
             pending_focus: None,
             slash_open: false,
+            slash_selected_index: 0,
             dirty: false,
             drafts: HashMap::new(),
             loaded_modified_ms: 0,
@@ -222,6 +225,7 @@ impl NodusApp {
         self.active_block = None;
         self.pending_focus = None;
         self.slash_open = false;
+        self.slash_selected_index = 0;
         self.loaded_modified_ms = vault::modified_ms(&path);
         self.selected = Some(path);
         self.save_error = None;
@@ -231,11 +235,12 @@ impl NodusApp {
         self.stash_current_draft();
         let path = self.next_unsaved_note_path();
         self.selected = Some(path.clone());
-        self.blocks = vec!["# Nova nota".to_string(), String::new()];
+        self.blocks = vec![Block::h1("Nova nota"), Block::paragraph("")];
         self.full_editor_text = content_from_blocks(&self.blocks);
         self.active_block = Some(1);
         self.pending_focus = Some(1);
         self.slash_open = false;
+        self.slash_selected_index = 0;
         self.dirty = true;
         self.loaded_modified_ms = 0;
         self.save_error = None;
@@ -386,6 +391,7 @@ impl NodusApp {
                 self.active_block = None;
                 self.pending_focus = None;
                 self.slash_open = false;
+                self.slash_selected_index = 0;
                 self.loaded_modified_ms = modified;
             }
         }
@@ -559,37 +565,52 @@ impl NodusApp {
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Left: reveal sidebar when hidden (dual toggle).
-                    if !sidebar_visible {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("›").font(ui_semibold(16.0)).color(palette.muted),
-                                )
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
+                    // Left: toggle sidebar button.
+                    let sidebar_icon = if sidebar_visible { "◨" } else { "◻" };
+                    let sidebar_tip = if sidebar_visible {
+                        "Ocultar sidebar (Ctrl+B)"
+                    } else {
+                        "Mostrar sidebar (Ctrl+B)"
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(sidebar_icon).font(ui_semibold(15.0)).color(palette.muted),
                             )
-                            .on_hover_text("Mostrar sidebar (Ctrl+B)")
-                            .clicked()
-                        {
-                            self.settings.ui.sidebar_visible = true;
-                            self.note_panel_toggle();
-                            self.save_ui_prefs();
-                        }
-                        ui.add_space(4.0);
+                            .frame(false)
+                            .fill(Color32::TRANSPARENT),
+                        )
+                        .on_hover_text(sidebar_tip)
+                        .clicked()
+                    {
+                        self.settings.ui.sidebar_visible = !self.settings.ui.sidebar_visible;
+                        self.note_panel_toggle();
+                        self.save_ui_prefs();
                     }
+                    ui.add_space(4.0);
 
-                    // Vault name / device label.
+                    // Vault / device label.
                     ui.label(
                         RichText::new(&self.settings.device_name)
-                            .font(ui_semibold(14.0))
-                            .color(palette.ink),
+                            .font(ui_medium(13.0))
+                            .color(palette.muted),
                     );
 
-                    ui.add_space(16.0);
+                    if let Some(selected_path) = &self.selected {
+                        ui.label(RichText::new("/").font(ui_regular(12.0)).color(palette.border));
+                        let file_name = selected_path.file_name().and_then(|v| v.to_str()).unwrap_or("Nota");
+                        let clean_title = file_name.strip_suffix(".md").unwrap_or(file_name);
+                        ui.label(
+                            RichText::new(clean_title)
+                                .font(ui_semibold(13.5))
+                                .color(palette.ink),
+                        );
+                    }
+
+                    ui.add_space(14.0);
 
                     // Search field with clear button.
-                    let search_width = 240.0_f32.min(ui.available_width() * 0.35);
+                    let search_width = 220.0_f32.min(ui.available_width() * 0.32);
                     let search_response = ui.add_sized(
                         [search_width, 28.0],
                         egui::TextEdit::singleline(&mut self.search)
@@ -617,7 +638,7 @@ impl NodusApp {
                         self.search.clear();
                     }
 
-                    ui.add_space(12.0);
+                    ui.add_space(10.0);
 
                     // View mode segmented control (Notion / Split / Preview).
                     let current_mode = self.settings.ui.view_mode;
@@ -721,25 +742,37 @@ impl NodusApp {
 
                         ui.add_space(8.0);
 
-                        // Save indicator pill.
-                        let indicator_text = if self.dirty {
-                            Some(("● Não salvo", palette.warning, palette.soft_warning))
+                        // Save action / indicator pill.
+                        if self.dirty {
+                            let save_btn = egui::Button::new(
+                                RichText::new("💾 Salvar")
+                                    .font(ui_medium(11.5))
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(palette.accent)
+                            .corner_radius(6.0);
+                            if ui
+                                .add_sized([78.0, 26.0], save_btn)
+                                .on_hover_text("Salvar e sincronizar (Ctrl+S)")
+                                .clicked()
+                            {
+                                self.save_and_sync();
+                            }
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("●").font(ui_regular(8.0)).color(palette.warning));
                         } else if self
                             .save_feedback_until
                             .is_some_and(|deadline| deadline > Instant::now())
                         {
-                            Some(("✓ Salvo", palette.success, palette.soft_green))
-                        } else {
-                            None
-                        };
-                        if let Some((text, fg, bg)) = indicator_text {
                             egui::Frame::new()
-                                .fill(bg)
-                                .corner_radius(7.0)
+                                .fill(palette.soft_green)
+                                .corner_radius(6.0)
                                 .inner_margin(egui::Margin::symmetric(8, 4))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        RichText::new(text).font(ui_medium(11.0)).color(fg),
+                                        RichText::new("✓ Salvo")
+                                            .font(ui_medium(11.0))
+                                            .color(palette.success),
                                     );
                                 });
                         }
@@ -810,21 +843,19 @@ impl NodusApp {
                 ui.add_space(16.0);
 
                 ui.allocate_ui_with_layout(
-                    egui::vec2(inner_width, 38.0),
+                    egui::vec2(inner_width, 36.0),
                     egui::Layout::top_down(egui::Align::Center),
                     |ui| {
+                        let new_note_btn = egui::Button::new(
+                            RichText::new("+  Nova nota")
+                                .font(ui_medium(13.0))
+                                .color(palette.accent),
+                        )
+                        .fill(if palette.dark { Color32::from_rgb(33, 43, 62) } else { palette.soft_blue })
+                        .stroke(Stroke::new(1.0, palette.accent.gamma_multiply(0.35)))
+                        .corner_radius(6.0);
                         if ui
-                            .add_sized(
-                                [inner_width, 38.0],
-                                egui::Button::new(
-                                    RichText::new("+  Nova nota")
-                                        .font(ui_medium(13.5))
-                                        .color(Color32::WHITE),
-                                )
-                                .fill(palette.accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(7.0),
-                            )
+                            .add_sized([inner_width, 34.0], new_note_btn)
                             .on_hover_text("Criar uma nota Markdown")
                             .clicked()
                         {
@@ -836,7 +867,7 @@ impl NodusApp {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new("SUAS NOTAS")
-                        .font(ui_semibold(11.0))
+                        .font(ui_semibold(10.5))
                         .color(palette.muted),
                 );
                 ui.add_space(4.0);
@@ -864,22 +895,31 @@ impl NodusApp {
                             .unwrap_or("Nota");
                         let clean_title = file_name.strip_suffix(".md").unwrap_or(file_name);
 
-                        let (bg_color, stroke) = if selected {
-                            (palette.surface, Stroke::new(1.0, palette.border))
+                        let bg_color = if selected {
+                            if palette.dark {
+                                Color32::from_rgb(36, 46, 68)
+                            } else {
+                                palette.soft_blue
+                            }
                         } else {
-                            (Color32::TRANSPARENT, Stroke::NONE)
+                            Color32::TRANSPARENT
                         };
+
+                        let item_rect_approx = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(inner_width - 4.0, 32.0),
+                        );
+                        let is_hovered = ui.rect_contains_pointer(item_rect_approx);
 
                         let mut delete_clicked = false;
                         let item_frame = egui::Frame::new()
                             .fill(bg_color)
-                            .stroke(stroke)
                             .corner_radius(6.0)
                             .inner_margin(egui::Margin::symmetric(8, 6));
 
                         let row_resp = item_frame.show(ui, |ui| {
                             ui.set_width(inner_width - 8.0);
-                            ui.set_min_height(theme::layout::SIDEBAR_ROW_HEIGHT - 6.0);
+                            ui.set_min_height(28.0);
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new("📄")
@@ -889,21 +929,22 @@ impl NodusApp {
 
                                 ui.label(
                                     RichText::new(clean_title)
-                                        .font(if selected { ui_medium(13.0) } else { ui_regular(13.0) })
-                                        .color(if selected { palette.ink } else { palette.muted }),
+                                        .font(if selected { ui_semibold(13.0) } else { ui_regular(13.0) })
+                                        .color(if selected { palette.ink } else { palette.ink.gamma_multiply(0.85) }),
                                 );
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                RichText::new("×").font(ui_regular(12.0)).color(palette.muted),
+                                    if is_hovered
+                                        && ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("×").font(ui_regular(11.0)).color(palette.muted),
+                                                )
+                                                .frame(false)
+                                                .fill(Color32::TRANSPARENT),
                                             )
-                                            .frame(false)
-                                            .fill(Color32::TRANSPARENT),
-                                        )
-                                        .on_hover_text("Excluir nota")
-                                        .clicked()
+                                            .on_hover_text("Excluir nota")
+                                            .clicked()
                                     {
                                         delete_clicked = true;
                                         note_to_delete = Some(path.clone());
@@ -911,7 +952,7 @@ impl NodusApp {
 
                                     if unsaved {
                                         ui.label(
-                                            RichText::new("●").font(ui_regular(9.0)).color(palette.warning),
+                                            RichText::new("●").font(ui_regular(8.0)).color(palette.warning),
                                         );
                                     }
                                 });
@@ -1187,106 +1228,47 @@ impl NodusApp {
     }
 
     fn render_editor(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.bg)
-                    .inner_margin(egui::Margin::symmetric(
-                        theme::layout::PAPER_HORIZONTAL_MARGIN as i8,
-                        theme::layout::PAPER_VERTICAL_MARGIN as i8,
-                    )),
-            )
-            .show(root_ui, |ui| {
-                ui.horizontal(|ui| {
-                    let title = self
-                        .selected
-                        .as_ref()
-                        .and_then(|path| path.file_name())
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("Nenhuma nota");
-                    let clean_title = title.strip_suffix(".md").unwrap_or(title);
-                    ui.label(RichText::new(clean_title).font(ui_semibold(20.0)).color(palette.ink));
-
-                    if self.dirty {
+        if self.selected.is_none() {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(palette.bg))
+                .show(root_ui, |ui| {
+                    ui.centered_and_justified(|ui| {
                         ui.label(
-                            RichText::new("● Não salva")
-                                .font(ui_medium(11.5))
-                                .color(palette.warning)
-                                .background_color(palette.soft_warning),
+                            RichText::new("Selecione uma nota na barra lateral ou crie uma nova.")
+                                .font(ui_regular(15.0))
+                                .color(palette.muted),
                         );
-                    } else if self
-                        .save_feedback_until
-                        .is_some_and(|deadline| deadline > Instant::now())
-                    {
-                        ui.label(
-                            RichText::new("✓ Salva")
-                                .font(ui_medium(11.5))
-                                .color(palette.success)
-                                .background_color(palette.soft_green),
-                        );
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let save = egui::Button::new(
-                            RichText::new("Salvar")
-                                .font(ui_medium(12.5))
-                                .color(Color32::WHITE),
-                        )
-                        .fill(palette.accent)
-                        .stroke(Stroke::NONE)
-                        .corner_radius(7.0);
-                        if ui
-                            .add_sized(
-                                [theme::layout::SAVE_BUTTON_WIDTH, 34.0],
-                                save,
-                            )
-                            .on_hover_text("Salvar nota (Ctrl+S)")
-                            .clicked()
-                        {
-                            self.save_and_sync();
-                        }
                     });
                 });
+            return;
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(palette.bg))
+            .show(root_ui, |ui| {
                 if let Some(error) = &self.save_error {
-                    ui.add_space(6.0);
                     ui.label(RichText::new(error).font(ui_regular(12.0)).color(palette.warning));
+                    ui.add_space(8.0);
                 }
-                ui.add_space(14.0);
 
                 if self.settings.ui.view_mode == ViewMode::Split {
                     self.render_split_editor(ui, palette);
                 } else {
                     let available = ui.available_size();
-                    let page_width = available.x.min(theme::layout::PAPER_MAX_WIDTH);
-                    let side_space = ((available.x - page_width) / 2.0).max(0.0);
+                    let page_width = available.x.min(760.0);
+                    let side_space = ((available.x - page_width) / 2.0).max(18.0);
+
                     ui.horizontal_top(|ui| {
                         ui.add_space(side_space);
-                        egui::Frame::new()
-                            .fill(palette.surface)
-                            .stroke(Stroke::new(1.0, palette.border))
-                            .corner_radius(8.0)
-                            .shadow(egui::epaint::Shadow {
-                                offset: [0, 4],
-                                blur: 16,
-                                spread: 0,
-                                color: Color32::from_black_alpha(if palette.dark { 40 } else { 12 }),
-                            })
-                            .inner_margin(egui::Margin::symmetric(
-                                theme::layout::PAPER_INNER_PADDING as i8,
-                                34,
-                            ))
-                            .show(ui, |ui| {
-                                ui.set_width(
-                                    (page_width - 2.0 * theme::layout::PAPER_INNER_PADDING)
-                                        .max(200.0),
-                                );
-                                ui.set_min_height((available.y - 4.0).max(260.0));
-                                match self.settings.ui.view_mode {
-                                    ViewMode::Notion => self.render_notion_blocks(ui, palette),
-                                    ViewMode::Preview => self.render_preview_mode(ui, palette),
-                                    ViewMode::Split => unreachable!(),
-                                }
-                            });
+                        ui.vertical(|ui| {
+                            ui.set_width(page_width);
+                            ui.add_space(14.0);
+                            match self.settings.ui.view_mode {
+                                ViewMode::Notion => self.render_notion_blocks(ui, palette),
+                                ViewMode::Preview => self.render_preview_mode(ui, palette),
+                                ViewMode::Split => unreachable!(),
+                            }
+                        });
                     });
                 }
             });
@@ -1305,267 +1287,612 @@ impl NodusApp {
         let total = self.blocks.len();
         let mut new_active = self.active_block;
         let mut pending_focus_block = self.pending_focus;
-        let mut block_to_insert: Option<(usize, String)> = None;
+        let mut block_to_insert: Option<(usize, Block)> = None;
         let mut block_to_remove: Option<usize> = None;
         let mut text_changed = false;
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for idx in 0..total {
-                let is_active = self.active_block == Some(idx);
-                let source = &mut self.blocks[idx];
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for idx in 0..total {
+                    let is_active = self.active_block == Some(idx);
+                    let block = &mut self.blocks[idx];
 
-                let trimmed = source.trim_start();
-                let is_heading1 = trimmed.starts_with("# ");
-                let is_heading2 = trimmed.starts_with("## ");
-                let is_heading3 = trimmed.starts_with("### ");
-                let is_checklist_un = trimmed.starts_with("- [ ] ") || trimmed.starts_with("* [ ] ");
-                let is_checklist_chk = trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") || trimmed.starts_with("* [x] ");
-                let is_checklist = is_checklist_un || is_checklist_chk;
-                let is_bullet = !is_checklist && (trimmed.starts_with("- ") || trimmed.starts_with("* "));
-                let is_quote = trimmed.starts_with("> ");
-                let is_code = trimmed.starts_with("```");
-                let is_divider = trimmed == "---" || trimmed == "***";
+                    if is_active {
+                        let (font, min_height) = match &block.kind {
+                            BlockKind::Heading1 => (serif_semibold(28.0), 38.0),
+                            BlockKind::Heading2 => (serif_semibold(22.0), 32.0),
+                            BlockKind::Heading3 => (serif_semibold(18.0), 28.0),
+                            BlockKind::Code { .. } => (FontId::monospace(13.0), 30.0),
+                            _ => (serif_regular(16.5), 26.0),
+                        };
 
-                if is_active {
-                    let (font, min_height) = if is_heading1 {
-                        (serif_semibold(26.0), 38.0)
-                    } else if is_heading2 {
-                        (serif_semibold(21.0), 32.0)
-                    } else if is_heading3 {
-                        (serif_semibold(18.0), 28.0)
-                    } else if is_code {
-                        (FontId::monospace(13.5), 28.0)
-                    } else {
-                        (serif_regular(16.5), 26.0)
-                    };
-
-                    let editor_frame = if is_quote {
-                        egui::Frame::new()
-                            .fill(if palette.dark { Color32::from_rgb(31, 35, 45) } else { palette.soft_blue })
-                            .stroke(Stroke::new(3.0, palette.accent))
-                            .corner_radius(egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
-                            .inner_margin(egui::Margin { left: 14, right: 8, top: 6, bottom: 6 })
-                    } else if is_code {
-                        egui::Frame::new()
-                            .fill(if palette.dark { Color32::from_rgb(20, 24, 32) } else { Color32::from_rgb(238, 242, 247) })
-                            .stroke(Stroke::new(1.0, palette.border))
-                            .corner_radius(6.0)
-                            .inner_margin(egui::Margin::symmetric(10, 8))
-                    } else {
-                        egui::Frame::new()
+                        let frame_text = egui::Frame::new()
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE)
-                            .inner_margin(egui::Margin::symmetric(2, 3))
-                    };
+                            .inner_margin(egui::Margin::symmetric(2, 2));
 
-                    let response = editor_frame.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            if is_checklist {
-                                let mut checked = is_checklist_chk;
-                                let cb = ui.checkbox(&mut checked, "");
-                                if cb.changed() {
-                                    let content = if is_checklist_chk {
-                                        source.replacen("- [x] ", "", 1).replacen("- [X] ", "", 1).replacen("* [x] ", "", 1)
+                        let (response, submitted) = match &mut block.kind {
+                            BlockKind::Checklist(checked) => {
+                                ui.horizontal(|ui| {
+                                    let mut chk = *checked;
+                                    if ui.checkbox(&mut chk, "").changed() {
+                                        *checked = chk;
+                                        text_changed = true;
+                                    }
+                                    let resp = ui.add_sized(
+                                        egui::vec2(ui.available_width(), min_height),
+                                        egui::TextEdit::singleline(&mut block.text)
+                                            .font(font)
+                                            .text_color(palette.ink)
+                                            .frame(frame_text)
+                                            .hint_text("Item de checklist..."),
+                                    );
+                                    let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                    (resp, sub)
+                                }).inner
+                            }
+                            BlockKind::Bullet => {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("•").font(ui_semibold(17.0)).color(palette.accent));
+                                    let resp = ui.add_sized(
+                                        egui::vec2(ui.available_width(), min_height),
+                                        egui::TextEdit::singleline(&mut block.text)
+                                            .font(font)
+                                            .text_color(palette.ink)
+                                            .frame(frame_text)
+                                            .hint_text("Item da lista..."),
+                                    );
+                                    let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                    (resp, sub)
+                                }).inner
+                            }
+                            BlockKind::Numbered(n) => {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("{n}.")).font(ui_semibold(14.5)).color(palette.muted));
+                                    let resp = ui.add_sized(
+                                        egui::vec2(ui.available_width(), min_height),
+                                        egui::TextEdit::singleline(&mut block.text)
+                                            .font(font)
+                                            .text_color(palette.ink)
+                                            .frame(frame_text)
+                                            .hint_text("Item numerado..."),
+                                    );
+                                    let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                    (resp, sub)
+                                }).inner
+                            }
+                            BlockKind::Heading1 => {
+                                let resp = ui.add_sized(
+                                    egui::vec2(ui.available_width(), min_height),
+                                    egui::TextEdit::singleline(&mut block.text)
+                                        .font(font)
+                                        .text_color(palette.ink)
+                                        .frame(frame_text)
+                                        .hint_text("Título 1..."),
+                                );
+                                let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                (resp, sub)
+                            }
+                            BlockKind::Heading2 => {
+                                let resp = ui.add_sized(
+                                    egui::vec2(ui.available_width(), min_height),
+                                    egui::TextEdit::singleline(&mut block.text)
+                                        .font(font)
+                                        .text_color(palette.ink)
+                                        .frame(frame_text)
+                                        .hint_text("Título 2..."),
+                                );
+                                let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                (resp, sub)
+                            }
+                            BlockKind::Heading3 => {
+                                let resp = ui.add_sized(
+                                    egui::vec2(ui.available_width(), min_height),
+                                    egui::TextEdit::singleline(&mut block.text)
+                                        .font(font)
+                                        .text_color(palette.ink)
+                                        .frame(frame_text)
+                                        .hint_text("Título 3..."),
+                                );
+                                let sub = resp.lost_focus() && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                                (resp, sub)
+                            }
+                            BlockKind::Quote => {
+                                let quote_frame = egui::Frame::new()
+                                    .fill(if palette.dark { Color32::from_rgb(30, 34, 43) } else { palette.soft_blue })
+                                    .stroke(Stroke::new(3.0, palette.accent))
+                                    .corner_radius(egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
+                                    .inner_margin(egui::Margin { left: 14, right: 10, top: 7, bottom: 7 });
+                                quote_frame.show(ui, |ui| {
+                                    let resp = ui.add_sized(
+                                        egui::vec2(ui.available_width(), min_height),
+                                        egui::TextEdit::multiline(&mut block.text)
+                                            .font(font)
+                                            .text_color(palette.ink)
+                                            .frame(frame_text)
+                                            .hint_text("Citação..."),
+                                    );
+                                    (resp, false)
+                                }).inner
+                            }
+                            BlockKind::Code { lang } => {
+                                let code_frame = egui::Frame::new()
+                                    .fill(if palette.dark { Color32::from_rgb(20, 23, 30) } else { Color32::from_rgb(240, 243, 248) })
+                                    .stroke(Stroke::new(1.0, palette.border))
+                                    .corner_radius(6.0)
+                                    .inner_margin(egui::Margin::symmetric(12, 10));
+                                code_frame.show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new("linguagem:").font(ui_regular(10.5)).color(palette.muted));
+                                        ui.add_sized([80.0, 20.0], egui::TextEdit::singleline(lang).font(ui_medium(11.0)).frame(egui::Frame::NONE));
+                                    });
+                                    ui.add_space(4.0);
+                                    let resp = ui.add_sized(
+                                        egui::vec2(ui.available_width(), min_height),
+                                        egui::TextEdit::multiline(&mut block.text)
+                                            .font(font)
+                                            .text_color(palette.ink)
+                                            .frame(frame_text)
+                                            .hint_text("Código..."),
+                                    );
+                                    (resp, false)
+                                }).inner
+                            }
+                            BlockKind::Divider => {
+                                ui.separator();
+                                let resp = ui.label(RichText::new("Divisor (pressione Backspace para remover)").font(ui_regular(11.0)).color(palette.muted));
+                                (resp, false)
+                            }
+                            BlockKind::Paragraph => {
+                                let resp = ui.add_sized(
+                                    egui::vec2(ui.available_width(), min_height),
+                                    egui::TextEdit::multiline(&mut block.text)
+                                        .font(font)
+                                        .text_color(palette.ink)
+                                        .frame(frame_text)
+                                        .hint_text("Digite '/' para comandos ou comece a escrever..."),
+                                );
+                                (resp, false)
+                            }
+                        };
+
+                        if response.changed() {
+                            text_changed = true;
+
+                            if block.kind == BlockKind::Paragraph {
+                                if let Some(rest) = block.text.strip_prefix("### ") {
+                                    block.kind = BlockKind::Heading3;
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("## ") {
+                                    block.kind = BlockKind::Heading2;
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("# ") {
+                                    block.kind = BlockKind::Heading1;
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("- [ ] ").or_else(|| block.text.strip_prefix("[] ")) {
+                                    block.kind = BlockKind::Checklist(false);
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("- ").or_else(|| block.text.strip_prefix("* ")) {
+                                    block.kind = BlockKind::Bullet;
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("1. ") {
+                                    block.kind = BlockKind::Numbered(1);
+                                    block.text = rest.to_string();
+                                } else if let Some(rest) = block.text.strip_prefix("> ") {
+                                    block.kind = BlockKind::Quote;
+                                    block.text = rest.to_string();
+                                } else if block.text.trim() == "---" {
+                                    block.kind = BlockKind::Divider;
+                                    block.text.clear();
+                                } else if block.text.starts_with("```") {
+                                    let lang = block.text.trim_start_matches("```").trim().to_string();
+                                    block.kind = BlockKind::Code { lang };
+                                    block.text.clear();
+                                }
+                            }
+
+                            if block.text.starts_with('/') {
+                                self.slash_open = true;
+                            }
+
+                            if block.kind == BlockKind::Paragraph && block.text.ends_with('\n') {
+                                let is_shift = ui.ctx().input(|i| i.modifiers.shift);
+                                if !is_shift {
+                                    block.text.pop();
+                                    block_to_insert = Some((idx + 1, Block::paragraph("")));
+                                }
+                            }
+                        }
+
+                        if submitted {
+                            match &block.kind {
+                                BlockKind::Checklist(_) => {
+                                    if block.text.trim().is_empty() {
+                                        block.kind = BlockKind::Paragraph;
                                     } else {
-                                        source.replacen("- [ ] ", "", 1).replacen("* [ ] ", "", 1)
+                                        block_to_insert = Some((idx + 1, Block::checklist(false, "")));
+                                    }
+                                }
+                                BlockKind::Bullet => {
+                                    if block.text.trim().is_empty() {
+                                        block.kind = BlockKind::Paragraph;
+                                    } else {
+                                        block_to_insert = Some((idx + 1, Block::bullet("")));
+                                    }
+                                }
+                                BlockKind::Numbered(n) => {
+                                    if block.text.trim().is_empty() {
+                                        block.kind = BlockKind::Paragraph;
+                                    } else {
+                                        block_to_insert = Some((idx + 1, Block::numbered(n + 1, "")));
+                                    }
+                                }
+                                BlockKind::Heading1 | BlockKind::Heading2 | BlockKind::Heading3 => {
+                                    block_to_insert = Some((idx + 1, Block::paragraph("")));
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if pending_focus_block == Some(idx) {
+                            response.request_focus();
+                            pending_focus_block = None;
+                        }
+
+                        if response.has_focus() {
+                            let (esc_pressed, backspace_pressed) = ui.ctx().input(|input| {
+                                (input.key_pressed(egui::Key::Escape), input.key_pressed(egui::Key::Backspace))
+                            });
+
+                            if esc_pressed {
+                                if self.slash_open {
+                                    block.text = strip_slash_trigger(&block.text);
+                                    self.slash_open = false;
+                                    text_changed = true;
+                                } else {
+                                    response.surrender_focus();
+                                    new_active = None;
+                                }
+                            }
+
+                            if backspace_pressed && block.text.is_empty() {
+                                if block.kind != BlockKind::Paragraph {
+                                    block.kind = BlockKind::Paragraph;
+                                    text_changed = true;
+                                } else if total > 1 && idx > 0 {
+                                    block_to_remove = Some(idx);
+                                }
+                            }
+                        } else if response.lost_focus() && pending_focus_block.is_none() && !self.slash_open {
+                            new_active = None;
+                        }
+                    } else {
+                        // Visual rendered block
+                        match &mut block.kind {
+                            BlockKind::Heading1 => {
+                                ui.add_space(8.0);
+                                let resp = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&block.text)
+                                            .font(serif_semibold(28.0))
+                                            .color(palette.ink),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+                                let mut row_rect = resp.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let click_resp = ui.interact(row_rect, ui.id().with(("h1", idx)), egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Heading2 => {
+                                ui.add_space(6.0);
+                                let resp = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&block.text)
+                                            .font(serif_semibold(22.0))
+                                            .color(palette.ink),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+                                let mut row_rect = resp.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let click_resp = ui.interact(row_rect, ui.id().with(("h2", idx)), egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Heading3 => {
+                                ui.add_space(4.0);
+                                let resp = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&block.text)
+                                            .font(serif_semibold(18.0))
+                                            .color(palette.ink),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+                                let mut row_rect = resp.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let click_resp = ui.interact(row_rect, ui.id().with(("h3", idx)), egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Checklist(checked) => {
+                                let mut is_checked = *checked;
+                                let mut checked_changed = false;
+                                let row_id = ui.id().with(("chk_row", idx));
+                                let row_resp = ui.horizontal(|ui| {
+                                    let cb = ui.checkbox(&mut is_checked, "");
+                                    if cb.changed() {
+                                        checked_changed = true;
+                                    }
+                                    let txt = if is_checked {
+                                        RichText::new(&block.text)
+                                            .font(serif_regular(16.5))
+                                            .color(palette.muted)
+                                            .strikethrough()
+                                    } else {
+                                        RichText::new(&block.text)
+                                            .font(serif_regular(16.5))
+                                            .color(palette.ink)
                                     };
-                                    let prefix = if checked { "- [x] " } else { "- [ ] " };
-                                    *source = format!("{prefix}{content}");
+                                    ui.add(egui::Label::new(txt));
+                                });
+                                if checked_changed {
+                                    *checked = is_checked;
                                     text_changed = true;
                                 }
+                                let mut row_rect = row_resp.response.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let mut text_click_rect = row_rect;
+                                text_click_rect.min.x = row_resp.response.rect.min.x + 24.0;
+                                let click_resp = ui.interact(text_click_rect, row_id, egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() && !checked_changed {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
                             }
-
-                            let text_frame = egui::Frame::new()
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .inner_margin(egui::Margin::same(2));
-                            ui.add_sized(
-                                egui::vec2(ui.available_width(), min_height),
-                                egui::TextEdit::multiline(source)
-                                    .font(font)
-                                    .text_color(palette.ink)
-                                    .desired_width(f32::INFINITY)
-                                    .frame(text_frame)
-                                    .margin(egui::Margin::same(2))
-                                    .hint_text("Digite '/' para comandos ou comece a escrever..."),
-                            )
-                        }).inner
-                    }).inner;
-
-                    if response.changed() {
-                        text_changed = true;
-
-                        if source.contains("\n\n") {
-                            let parts: Vec<String> = source.split("\n\n").map(str::to_string).collect();
-                            if parts.len() >= 2 {
-                                *source = parts[0].clone();
-                                let remaining = parts[1..].join("\n\n");
-                                block_to_insert = Some((idx + 1, remaining));
+                            BlockKind::Bullet => {
+                                let row_id = ui.id().with(("bullet_row", idx));
+                                let row_resp = ui.horizontal(|ui| {
+                                    ui.label(RichText::new("•").font(ui_semibold(17.0)).color(palette.accent));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&block.text)
+                                                .font(serif_regular(16.5))
+                                                .color(palette.ink),
+                                        ),
+                                    );
+                                });
+                                let mut row_rect = row_resp.response.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let click_resp = ui.interact(row_rect, row_id, egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
                             }
-                        } else if source.ends_with('\n') {
-                            let is_shift = ui.ctx().input(|i| i.modifiers.shift);
-                            if !is_shift {
-                                *source = source.trim_end_matches('\n').to_string();
-                                if is_heading1 || is_heading2 || is_heading3 {
-                                    block_to_insert = Some((idx + 1, String::new()));
-                                } else if is_checklist {
-                                    if *source == "- [ ]" || *source == "- [ ] " || *source == "- [x]" || *source == "- [x] " {
-                                        *source = String::new();
-                                    } else {
-                                        block_to_insert = Some((idx + 1, "- [ ] ".to_string()));
+                            BlockKind::Numbered(n) => {
+                                let row_id = ui.id().with(("num_row", idx));
+                                let row_resp = ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("{n}.")).font(ui_semibold(14.5)).color(palette.muted));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&block.text)
+                                                .font(serif_regular(16.5))
+                                                .color(palette.ink),
+                                        ),
+                                    );
+                                });
+                                let mut row_rect = row_resp.response.rect;
+                                row_rect.min.x = ui.max_rect().left();
+                                row_rect.max.x = ui.max_rect().right();
+                                let click_resp = ui.interact(row_rect, row_id, egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Quote => {
+                                let quote_frame = egui::Frame::new()
+                                    .fill(if palette.dark { Color32::from_rgb(30, 34, 43) } else { palette.soft_blue })
+                                    .stroke(Stroke::new(3.0, palette.accent))
+                                    .corner_radius(egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 })
+                                    .inner_margin(egui::Margin { left: 14, right: 10, top: 7, bottom: 7 });
+                                let quote_resp = quote_frame.show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&block.text)
+                                                .font(serif_regular(16.5))
+                                                .italics()
+                                                .color(palette.ink),
+                                        ),
+                                    );
+                                });
+                                let click_resp = ui.interact(quote_resp.response.rect, ui.id().with(("quote_row", idx)), egui::Sense::click());
+                                if click_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                }
+                                if click_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Code { lang } => {
+                                let code_frame = egui::Frame::new()
+                                    .fill(if palette.dark { Color32::from_rgb(20, 23, 30) } else { Color32::from_rgb(240, 243, 248) })
+                                    .stroke(Stroke::new(1.0, palette.border))
+                                    .corner_radius(6.0)
+                                    .inner_margin(egui::Margin::symmetric(12, 10));
+                                code_frame.show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    if !lang.is_empty() {
+                                        ui.label(RichText::new(lang.as_str()).font(ui_medium(11.0)).color(palette.muted));
+                                        ui.add_space(2.0);
                                     }
-                                } else if is_bullet {
-                                    if *source == "-" || *source == "- " || *source == "*" || *source == "* " {
-                                        *source = String::new();
-                                    } else {
-                                        block_to_insert = Some((idx + 1, "- ".to_string()));
+                                    let label_resp = ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&block.text)
+                                                .font(FontId::monospace(13.0))
+                                                .color(palette.ink),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if label_resp.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                    }
+                                    if label_resp.clicked() {
+                                        new_active = Some(idx);
+                                        pending_focus_block = Some(idx);
+                                    }
+                                });
+                            }
+                            BlockKind::Divider => {
+                                let sep = ui.add(egui::Separator::default().spacing(16.0));
+                                let sep_resp = ui.interact(sep.rect, ui.id().with(("sep", idx)), egui::Sense::click());
+                                if sep_resp.clicked() {
+                                    new_active = Some(idx);
+                                    pending_focus_block = Some(idx);
+                                }
+                            }
+                            BlockKind::Paragraph => {
+                                let block_id = ui.id().with(("block_p", idx));
+                                let is_placeholder = block.text.trim().is_empty();
+                                let display_text = if is_placeholder {
+                                    "Comece a escrever ou digite '/' para comandos..."
+                                } else {
+                                    &block.text
+                                };
+                                let text_color = if is_placeholder { palette.muted } else { palette.ink };
+
+                                if !is_placeholder && (block.text.contains('*') || block.text.contains('`') || block.text.contains('[')) {
+                                    let inner_resp = ui.scope(|ui| {
+                                        CommonMarkViewer::new()
+                                            .indentation_spaces(2)
+                                            .max_image_width(Some(ui.available_width() as usize))
+                                            .default_width(Some(ui.available_width() as usize))
+                                            .default_implicit_uri_scheme(implicit_uri.clone())
+                                            .show(ui, &mut self.markdown_cache, &block.text)
+                                    });
+                                    let mut block_rect = inner_resp.response.rect;
+                                    if block_rect.height() < 24.0 {
+                                        block_rect.max.y = block_rect.min.y + 24.0;
+                                    }
+                                    block_rect.min.x = ui.max_rect().left();
+                                    block_rect.max.x = ui.max_rect().right();
+                                    let click_resp = ui.interact(block_rect, block_id, egui::Sense::click());
+                                    if click_resp.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                    }
+                                    if click_resp.clicked() {
+                                        new_active = Some(idx);
+                                        pending_focus_block = Some(idx);
                                     }
                                 } else {
-                                    block_to_insert = Some((idx + 1, String::new()));
+                                    let resp = ui.add(
+                                        egui::Label::new(
+                                            RichText::new(display_text)
+                                                .font(serif_regular(16.5))
+                                                .color(text_color),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if resp.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                                    }
+                                    if resp.clicked() {
+                                        new_active = Some(idx);
+                                        pending_focus_block = Some(idx);
+                                    }
                                 }
                             }
                         }
                     }
 
-                    if pending_focus_block == Some(idx) {
-                        response.request_focus();
-                        pending_focus_block = None;
-                    }
+                    ui.add_space(4.0);
 
-                    if response.has_focus() {
-                        let (esc_pressed, backspace_pressed) = ui.ctx().input(|input| {
-                            (input.key_pressed(egui::Key::Escape), input.key_pressed(egui::Key::Backspace))
-                        });
-
-                        if esc_pressed {
-                            if self.slash_open {
-                                *source = strip_slash_trigger(source);
-                                self.slash_open = false;
-                                text_changed = true;
-                            } else {
-                                response.surrender_focus();
-                                new_active = None;
-                            }
-                        }
-
-                        if backspace_pressed {
-                            if source.is_empty() && total > 1 && idx > 0 {
-                                block_to_remove = Some(idx);
-                            } else if *source == "- [ ] " || *source == "- [x] " || *source == "- " || *source == "* " || *source == "# " || *source == "## " || *source == "### " || *source == "> " {
-                                *source = String::new();
-                                text_changed = true;
-                            }
-                        }
-                    } else if response.lost_focus() && pending_focus_block.is_none() && !self.slash_open {
-                        new_active = None;
-                    }
-                } else if is_divider {
-                    let sep = ui.add(egui::Separator::default().spacing(14.0));
-                    let sep_resp = ui.interact(sep.rect, ui.id().with(("sep", idx)), egui::Sense::click());
-                    if sep_resp.clicked() {
-                        new_active = Some(idx);
-                        pending_focus_block = Some(idx);
-                    }
-                } else {
-                    let block_id = ui.id().with(("block_wrap", idx));
-                    let prior_body = ui.style().text_styles.get(&TextStyle::Body).cloned();
-                    let prior_heading = ui.style().text_styles.get(&TextStyle::Heading).cloned();
-                    ui.style_mut()
-                        .text_styles
-                        .insert(TextStyle::Body, serif_regular(16.5));
-                    ui.style_mut()
-                        .text_styles
-                        .insert(TextStyle::Heading, serif_semibold(26.0));
-
-                    let inner_resp = ui.scope(|ui| {
-                        CommonMarkViewer::new()
-                            .indentation_spaces(2)
-                            .max_image_width(Some(ui.available_width() as usize))
-                            .default_width(Some(ui.available_width() as usize))
-                            .default_implicit_uri_scheme(implicit_uri.clone())
-                            .show_mut(ui, &mut self.markdown_cache, source)
-                    });
-
-                    let style = ui.style_mut();
-                    if let Some(prior) = prior_body {
-                        style.text_styles.insert(TextStyle::Body, prior);
-                    }
-                    if let Some(prior) = prior_heading {
-                        style.text_styles.insert(TextStyle::Heading, prior);
-                    }
-
-                    let mut block_rect = inner_resp.response.rect;
-                    if block_rect.height() < 24.0 {
-                        block_rect.max.y = block_rect.min.y + 24.0;
-                    }
-                    block_rect.min.x = ui.max_rect().left();
-                    block_rect.max.x = ui.max_rect().right();
-
-                    let click_resp = ui.interact(block_rect, block_id, egui::Sense::click());
-                    if click_resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                    }
-                    if inner_resp.inner.response.changed() {
+                    if is_active && self.slash_open
+                        && let Some(chosen_kind) = Self::render_slash_menu(ui, palette, &block.text, &mut self.slash_selected_index)
+                    {
+                        block.kind = chosen_kind;
+                        block.text = strip_slash_trigger(&block.text);
+                        self.slash_open = false;
+                        self.slash_selected_index = 0;
                         text_changed = true;
-                    } else if click_resp.clicked() {
-                        new_active = Some(idx);
                         pending_focus_block = Some(idx);
                     }
                 }
 
-                if idx + 1 < total {
-                    ui.add_space(6.0);
-                }
-
-                if self.active_block == Some(idx) {
-                    if !self.slash_open && self.blocks[idx].starts_with('/') {
-                        self.slash_open = true;
-                    }
-                    if self.slash_open {
-                        self.render_slash_menu(ui, palette, idx);
-                    }
-                }
-            }
-
-            if self.blocks.is_empty() {
-                self.blocks.push(String::new());
-                new_active = Some(0);
-                pending_focus_block = Some(0);
-            } else {
                 let available = ui.available_size();
                 if available.y > 40.0 {
                     let (_, empty_resp) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), available.y.max(80.0)),
+                        egui::vec2(ui.available_width(), available.y.max(120.0)),
                         egui::Sense::click(),
                     );
                     if empty_resp.clicked() {
-                        if self.blocks.last().map(|b| b.trim().is_empty()).unwrap_or(false) {
+                        if self.blocks.last().map(|b| b.text.trim().is_empty() && b.kind == BlockKind::Paragraph).unwrap_or(false) {
                             let last_idx = self.blocks.len().saturating_sub(1);
                             new_active = Some(last_idx);
                             pending_focus_block = Some(last_idx);
                         } else {
                             let next_idx = self.blocks.len();
-                            self.blocks.push(String::new());
-                            new_active = Some(next_idx);
-                            pending_focus_block = Some(next_idx);
-                            text_changed = true;
+                            block_to_insert = Some((next_idx, Block::paragraph("")));
                         }
                     }
                 }
-            }
-        });
+            });
 
         if let Some(rem_idx) = block_to_remove {
-            self.blocks.remove(rem_idx);
-            new_active = Some(rem_idx.saturating_sub(1));
-            pending_focus_block = new_active;
-            text_changed = true;
+            if self.blocks.len() > 1 {
+                self.blocks.remove(rem_idx);
+                new_active = Some(rem_idx.saturating_sub(1));
+                pending_focus_block = new_active;
+                text_changed = true;
+            } else if let Some(first) = self.blocks.first_mut() {
+                first.kind = BlockKind::Paragraph;
+                first.text.clear();
+                new_active = Some(0);
+                pending_focus_block = Some(0);
+                text_changed = true;
+            }
         }
 
-        if let Some((ins_idx, ins_text)) = block_to_insert {
-            self.blocks.insert(ins_idx, ins_text);
-            new_active = Some(ins_idx);
-            pending_focus_block = Some(ins_idx);
+        if let Some((ins_idx, ins_block)) = block_to_insert {
+            let actual_idx = ins_idx.min(self.blocks.len());
+            self.blocks.insert(actual_idx, ins_block);
+            new_active = Some(actual_idx);
+            pending_focus_block = Some(actual_idx);
             text_changed = true;
         }
 
@@ -1577,6 +1904,7 @@ impl NodusApp {
 
         if self.slash_open && self.active_block.is_none() {
             self.slash_open = false;
+            self.slash_selected_index = 0;
         }
 
         self.active_block = new_active;
@@ -1593,10 +1921,33 @@ impl NodusApp {
             .unwrap_or_else(|| "file:///".to_owned());
 
         let total_width = ui.available_width();
-        let col_width = ((total_width - 16.0) / 2.0).max(100.0);
+        let col_width = ((total_width - 24.0) / 2.0).max(120.0);
 
         ui.horizontal_top(|ui| {
-            // Left column: raw Markdown editor
+            egui::Frame::new()
+                .fill(palette.surface)
+                .stroke(Stroke::new(1.0, palette.border))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::same(16))
+                .show(ui, |ui| {
+                    ui.set_width(col_width);
+                    ui.set_min_height((ui.available_height() - 8.0).max(400.0));
+                    let resp = ui.add_sized(
+                        egui::vec2(col_width - 16.0, (ui.available_height() - 20.0).max(380.0)),
+                        egui::TextEdit::multiline(&mut self.full_editor_text)
+                            .font(FontId::monospace(13.0))
+                            .text_color(palette.ink)
+                            .frame(egui::Frame::NONE),
+                    );
+                    if resp.changed() {
+                        self.dirty = true;
+                        self.save_feedback_until = None;
+                        self.blocks = blocks_from_content(&self.full_editor_text);
+                    }
+                });
+
+            ui.add_space(8.0);
+
             egui::Frame::new()
                 .fill(palette.surface)
                 .stroke(Stroke::new(1.0, palette.border))
@@ -1606,64 +1957,14 @@ impl NodusApp {
                     ui.set_width(col_width);
                     ui.set_min_height((ui.available_height() - 8.0).max(400.0));
                     egui::ScrollArea::vertical()
-                        .id_salt("split_editor_scroll")
-                        .show(ui, |ui| {
-                            let editor_frame = egui::Frame::new()
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .inner_margin(egui::Margin::same(4));
-                            let resp = ui.add_sized(
-                                egui::vec2(ui.available_width(), ui.available_height().max(500.0)),
-                                egui::TextEdit::multiline(&mut self.full_editor_text)
-                                    .font(FontId::monospace(13.5))
-                                    .text_color(palette.ink)
-                                    .desired_width(f32::INFINITY)
-                                    .frame(editor_frame)
-                                    .margin(egui::Margin::same(4)),
-                            );
-                            if resp.changed() {
-                                self.dirty = true;
-                                self.blocks = blocks_from_content(&self.full_editor_text);
-                                self.save_feedback_until = None;
-                            }
-                        });
-                });
-
-            ui.add_space(16.0);
-
-            // Right column: live rendered preview
-            egui::Frame::new()
-                .fill(palette.surface)
-                .stroke(Stroke::new(1.0, palette.border))
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin::same(20))
-                .show(ui, |ui| {
-                    ui.set_width(col_width);
-                    ui.set_min_height((ui.available_height() - 8.0).max(400.0));
-                    egui::ScrollArea::vertical()
                         .id_salt("split_preview_scroll")
                         .show(ui, |ui| {
-                            let prior_body = ui.style().text_styles.get(&TextStyle::Body).cloned();
-                            let prior_heading = ui.style().text_styles.get(&TextStyle::Heading).cloned();
-                            ui.style_mut()
-                                .text_styles
-                                .insert(TextStyle::Body, serif_regular(16.5));
-                            ui.style_mut()
-                                .text_styles
-                                .insert(TextStyle::Heading, serif_semibold(26.0));
                             CommonMarkViewer::new()
                                 .indentation_spaces(2)
                                 .max_image_width(Some(ui.available_width() as usize))
                                 .default_width(Some(ui.available_width() as usize))
                                 .default_implicit_uri_scheme(implicit_uri)
                                 .show_mut(ui, &mut self.markdown_cache, &mut self.full_editor_text);
-                            let style = ui.style_mut();
-                            if let Some(prior) = prior_body {
-                                style.text_styles.insert(TextStyle::Body, prior);
-                            }
-                            if let Some(prior) = prior_heading {
-                                style.text_styles.insert(TextStyle::Heading, prior);
-                            }
                         });
                 });
         });
@@ -1681,27 +1982,12 @@ impl NodusApp {
         let original_text = content_from_blocks(&self.blocks);
         let mut full_text = original_text.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let prior_body = ui.style().text_styles.get(&TextStyle::Body).cloned();
-            let prior_heading = ui.style().text_styles.get(&TextStyle::Heading).cloned();
-            ui.style_mut()
-                .text_styles
-                .insert(TextStyle::Body, serif_regular(17.0));
-            ui.style_mut()
-                .text_styles
-                .insert(TextStyle::Heading, serif_semibold(27.0));
             CommonMarkViewer::new()
                 .indentation_spaces(2)
                 .max_image_width(Some(ui.available_width() as usize))
                 .default_width(Some(ui.available_width() as usize))
                 .default_implicit_uri_scheme(implicit_uri)
                 .show_mut(ui, &mut self.markdown_cache, &mut full_text);
-            let style = ui.style_mut();
-            if let Some(prior) = prior_body {
-                style.text_styles.insert(TextStyle::Body, prior);
-            }
-            if let Some(prior) = prior_heading {
-                style.text_styles.insert(TextStyle::Heading, prior);
-            }
         });
         if full_text != original_text {
             self.blocks = blocks_from_content(&full_text);
@@ -1712,14 +1998,14 @@ impl NodusApp {
 
     /// Render the slash command menu as a floating dropdown under the active block.
     fn render_slash_menu(
-        &mut self,
         ui: &mut egui::Ui,
         palette: theme::Palette,
-        block_idx: usize,
-    ) {
-        let raw_query = self.blocks[block_idx].strip_prefix('/').unwrap_or("");
+        block_text: &str,
+        slash_selected_index: &mut usize,
+    ) -> Option<BlockKind> {
+        let raw_query = block_text.strip_prefix('/').unwrap_or("");
         let query = raw_query.trim().to_lowercase();
-        let matching: Vec<_> = SLASH_COMMANDS
+        let matching: Vec<&SlashOption> = SLASH_COMMANDS
             .iter()
             .filter(|cmd| {
                 query.is_empty()
@@ -1729,18 +2015,40 @@ impl NodusApp {
             .collect();
 
         if matching.is_empty() {
-            return;
+            return None;
         }
+
+        let (up, down, enter) = ui.ctx().input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::Enter),
+            )
+        });
+
+        if down {
+            *slash_selected_index = (*slash_selected_index + 1).min(matching.len().saturating_sub(1));
+        }
+        if up {
+            *slash_selected_index = slash_selected_index.saturating_sub(1);
+        }
+        if enter
+            && let Some(cmd) = matching.get(*slash_selected_index)
+        {
+            return Some(cmd.kind.clone());
+        }
+
+        let mut chosen = None;
 
         egui::Frame::new()
             .fill(palette.surface)
             .stroke(egui::Stroke::new(1.0, palette.border))
             .corner_radius(8.0)
             .shadow(egui::epaint::Shadow {
-                offset: [0, 6],
-                blur: 20,
+                offset: [0, 8],
+                blur: 24,
                 spread: 0,
-                color: Color32::from_black_alpha(if palette.dark { 40 } else { 18 }),
+                color: Color32::from_black_alpha(if palette.dark { 50 } else { 20 }),
             })
             .inner_margin(egui::Margin::symmetric(6, 6))
             .show(ui, |ui| {
@@ -1751,27 +2059,32 @@ impl NodusApp {
                         .color(palette.muted),
                 );
                 ui.add_space(4.0);
-                for cmd in matching.iter().take(6) {
+
+                for (i, cmd) in matching.iter().take(8).enumerate() {
+                    let is_selected = i == *slash_selected_index;
+                    let (bg, fg) = if is_selected {
+                        (palette.soft_blue, palette.accent)
+                    } else {
+                        (Color32::TRANSPARENT, palette.ink)
+                    };
+
                     let item_btn = egui::Button::new(
-                        RichText::new(format!("{}  {}", cmd.icon, cmd.label))
-                            .font(ui_medium(12.5))
-                            .color(palette.ink),
+                        RichText::new(format!("{}   {}", cmd.icon, cmd.label))
+                            .font(if is_selected { ui_medium(12.5) } else { ui_regular(12.5) })
+                            .color(fg),
                     )
-                    .fill(Color32::TRANSPARENT)
+                    .fill(bg)
                     .stroke(Stroke::NONE)
                     .corner_radius(5.0);
 
-                    let response = ui.add_sized([270.0, 26.0], item_btn);
-                    if response.on_hover_text(cmd.desc).clicked() {
-                        self.blocks[block_idx] =
-                            apply_slash_choice(&self.blocks[block_idx], cmd.prefix);
-                        self.slash_open = false;
-                        self.dirty = true;
-                        self.full_editor_text = content_from_blocks(&self.blocks);
-                        self.save_feedback_until = None;
+                    let resp = ui.add_sized([268.0, 26.0], item_btn);
+                    if resp.on_hover_text(cmd.desc).clicked() {
+                        chosen = Some(cmd.kind.clone());
                     }
                 }
             });
+
+        chosen
     }
 
     fn render_close_dialog(&mut self, ctx: &egui::Context, palette: theme::Palette) {
@@ -2094,31 +2407,267 @@ fn friendly_network_error(message: &str) -> String {
     }
 }
 
-/// Split a Markdown document into per-block sources. A "block" is a run of
-/// lines separated by blank lines (`\n\n`). Each block is trimmed; empty
-/// blocks (whitespace only) are dropped.
-fn blocks_from_content(content: &str) -> Vec<String> {
-    content
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockKind {
+    Heading1,
+    Heading2,
+    Heading3,
+    Checklist(bool),
+    Bullet,
+    Numbered(usize),
+    Quote,
+    Code { lang: String },
+    Divider,
+    Paragraph,
 }
 
-/// Join per-block sources back into a Markdown document. The output ends
-/// with a single trailing newline so files always look "normal" on disk.
-fn content_from_blocks(blocks: &[String]) -> String {
-    if blocks.is_empty() {
-        String::new()
-    } else {
-        blocks.join("\n\n") + "\n"
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub kind: BlockKind,
+    pub text: String,
+}
+
+impl Block {
+    pub fn new(kind: BlockKind, text: impl Into<String>) -> Self {
+        Self {
+            kind,
+            text: text.into(),
+        }
     }
+
+    pub fn paragraph(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Paragraph, text)
+    }
+
+    pub fn h1(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Heading1, text)
+    }
+
+    pub fn h2(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Heading2, text)
+    }
+
+    pub fn h3(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Heading3, text)
+    }
+
+    pub fn checklist(checked: bool, text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Checklist(checked), text)
+    }
+
+    pub fn bullet(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Bullet, text)
+    }
+
+    pub fn numbered(num: usize, text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Numbered(num), text)
+    }
+
+    pub fn quote(text: impl Into<String>) -> Self {
+        Self::new(BlockKind::Quote, text)
+    }
+
+    pub fn code(lang: impl Into<String>, code: impl Into<String>) -> Self {
+        Self::new(BlockKind::Code { lang: lang.into() }, code)
+    }
+
+    pub fn divider() -> Self {
+        Self::new(BlockKind::Divider, "")
+    }
+
+    pub fn from_markdown_chunk(chunk: &str) -> Self {
+        let trimmed = chunk.trim();
+        if trimmed == "---" || trimmed == "***" {
+            return Self::divider();
+        }
+        if trimmed.starts_with("```") {
+            let lines: Vec<&str> = chunk.lines().collect();
+            let first_line = lines.first().copied().unwrap_or("");
+            let lang = first_line.trim_start_matches("```").trim().to_string();
+            let body = if lines.len() > 1 {
+                let end = if lines.last().is_some_and(|l| l.trim().starts_with("```")) {
+                    lines.len().saturating_sub(1)
+                } else {
+                    lines.len()
+                };
+                lines[1..end].join("\n")
+            } else {
+                String::new()
+            };
+            return Self::code(lang, body);
+        }
+        if let Some(rest) = trimmed.strip_prefix("### ") {
+            return Self::h3(rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("## ") {
+            return Self::h2(rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            return Self::h1(rest);
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("- [x] ")
+            .or_else(|| trimmed.strip_prefix("- [X] "))
+            .or_else(|| trimmed.strip_prefix("* [x] "))
+            .or_else(|| trimmed.strip_prefix("* [X] "))
+        {
+            return Self::checklist(true, rest);
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("- [ ] ")
+            .or_else(|| trimmed.strip_prefix("* [ ] "))
+        {
+            return Self::checklist(false, rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+            return Self::bullet(rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("> ") {
+            return Self::quote(rest);
+        }
+        if let Some(dot_pos) = trimmed.find(". ")
+            && let Ok(num) = trimmed[..dot_pos].parse::<usize>()
+        {
+            return Self::numbered(num, &trimmed[dot_pos + 2..]);
+        }
+        Self::paragraph(trimmed)
+    }
+
+    pub fn to_markdown(&self) -> String {
+        match &self.kind {
+            BlockKind::Heading1 => format!("# {}", self.text),
+            BlockKind::Heading2 => format!("## {}", self.text),
+            BlockKind::Heading3 => format!("### {}", self.text),
+            BlockKind::Checklist(true) => format!("- [x] {}", self.text),
+            BlockKind::Checklist(false) => format!("- [ ] {}", self.text),
+            BlockKind::Bullet => format!("- {}", self.text),
+            BlockKind::Numbered(n) => format!("{n}. {}", self.text),
+            BlockKind::Quote => format!("> {}", self.text),
+            BlockKind::Code { lang } => {
+                if lang.is_empty() {
+                    format!("```\n{}\n```", self.text)
+                } else {
+                    format!("```{lang}\n{}\n```", self.text)
+                }
+            }
+            BlockKind::Divider => "---".to_string(),
+            BlockKind::Paragraph => self.text.clone(),
+        }
+    }
+
+    pub fn is_list_item(&self) -> bool {
+        matches!(
+            self.kind,
+            BlockKind::Checklist(_) | BlockKind::Bullet | BlockKind::Numbered(_)
+        )
+    }
+}
+
+impl From<&str> for Block {
+    fn from(s: &str) -> Self {
+        Self::from_markdown_chunk(s)
+    }
+}
+
+impl From<String> for Block {
+    fn from(s: String) -> Self {
+        Self::from_markdown_chunk(&s)
+    }
+}
+
+pub fn blocks_from_content(content: &str) -> Vec<Block> {
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+    let mut in_code = false;
+
+    let flush = |lines: &mut Vec<&str>, blocks: &mut Vec<Block>| {
+        if !lines.is_empty() {
+            let chunk = lines.join("\n");
+            let trimmed = chunk.trim();
+            if !trimmed.is_empty() {
+                blocks.push(Block::from_markdown_chunk(&chunk));
+            }
+            lines.clear();
+        }
+    };
+
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if in_code {
+                current_lines.push(line);
+                flush(&mut current_lines, &mut blocks);
+                in_code = false;
+                continue;
+            } else {
+                flush(&mut current_lines, &mut blocks);
+                in_code = true;
+                current_lines.push(line);
+                continue;
+            }
+        }
+
+        if in_code {
+            current_lines.push(line);
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            flush(&mut current_lines, &mut blocks);
+            continue;
+        }
+
+        let is_heading = trimmed.starts_with("# ") || trimmed.starts_with("## ") || trimmed.starts_with("### ");
+        let is_divider = trimmed == "---" || trimmed == "***";
+        let is_quote = trimmed.starts_with("> ");
+        let is_checklist = trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") || trimmed.starts_with("* [ ] ") || trimmed.starts_with("* [x] ");
+        let is_bullet = !is_checklist && (trimmed.starts_with("- ") || trimmed.starts_with("* "));
+        let is_numbered = trimmed.find(". ").is_some_and(|pos| trimmed[..pos].parse::<usize>().is_ok());
+
+        let is_single_line_block = is_heading || is_divider || is_quote || is_checklist || is_bullet || is_numbered;
+
+        if is_single_line_block {
+            flush(&mut current_lines, &mut blocks);
+            blocks.push(Block::from_markdown_chunk(line));
+        } else {
+            current_lines.push(line);
+        }
+    }
+
+    flush(&mut current_lines, &mut blocks);
+
+    if blocks.is_empty() {
+        blocks.push(Block::paragraph(""));
+    }
+
+    blocks
+}
+
+pub fn content_from_blocks(blocks: &[Block]) -> String {
+    if blocks.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, block) in blocks.iter().enumerate() {
+        let md = block.to_markdown();
+        out.push_str(&md);
+        if i + 1 < blocks.len() {
+            let next = &blocks[i + 1];
+            if block.is_list_item() && next.is_list_item() {
+                out.push('\n');
+            } else {
+                out.push_str("\n\n");
+            }
+        }
+    }
+    out.push('\n');
+    out
 }
 
 struct SlashOption {
     label: &'static str,
-    prefix: &'static str,
+    kind: BlockKind,
     icon: &'static str,
     desc: &'static str,
     keywords: &'static str,
@@ -2127,99 +2676,76 @@ struct SlashOption {
 const SLASH_COMMANDS: &[SlashOption] = &[
     SlashOption {
         label: "Texto",
-        prefix: "",
+        kind: BlockKind::Paragraph,
         icon: "¶",
         desc: "Parágrafo normal de texto",
         keywords: "texto paragraph normal",
     },
     SlashOption {
         label: "Título 1",
-        prefix: "# ",
+        kind: BlockKind::Heading1,
         icon: "H1",
         desc: "Grande cabeçalho de seção",
         keywords: "titulo title heading h1 grande",
     },
     SlashOption {
         label: "Título 2",
-        prefix: "## ",
+        kind: BlockKind::Heading2,
         icon: "H2",
         desc: "Médio cabeçalho de subseção",
         keywords: "titulo title heading h2 medio",
     },
     SlashOption {
         label: "Título 3",
-        prefix: "### ",
+        kind: BlockKind::Heading3,
         icon: "H3",
         desc: "Pequeno subtítulo",
         keywords: "titulo title heading h3 pequeno",
     },
     SlashOption {
         label: "Checklist",
-        prefix: "- [ ] ",
+        kind: BlockKind::Checklist(false),
         icon: "☑",
         desc: "Tarefa com caixa de seleção",
         keywords: "checklist task tarefa todo check",
     },
     SlashOption {
         label: "Lista com marcadores",
-        prefix: "- ",
+        kind: BlockKind::Bullet,
         icon: "•",
         desc: "Lista de tópicos simples",
         keywords: "lista bullet list marcadores pontos",
     },
     SlashOption {
         label: "Lista numerada",
-        prefix: "1. ",
+        kind: BlockKind::Numbered(1),
         icon: "1.",
         desc: "Lista com contagem sequencial",
         keywords: "lista numerada number ordered",
     },
     SlashOption {
         label: "Citação",
-        prefix: "> ",
+        kind: BlockKind::Quote,
         icon: "❝",
         desc: "Destacar uma citação ou nota",
         keywords: "citacao quote destaque bloco",
     },
     SlashOption {
         label: "Código",
-        prefix: "```\n\n```",
+        kind: BlockKind::Code { lang: String::new() },
         icon: "</>",
         desc: "Bloco de código com sintaxe",
         keywords: "codigo code snippet bloco",
     },
     SlashOption {
         label: "Divisor",
-        prefix: "---",
+        kind: BlockKind::Divider,
         icon: "—",
         desc: "Linha horizontal de separação",
         keywords: "divisor separador divider linha",
     },
 ];
 
-
-
-/// Inject a slash-menu selection into a block. The block is expected to
-/// start with `/`; we replace from the start through the first whitespace
-/// boundary with the chosen prefix, preserving any text the user already
-/// had after the slash.
-fn apply_slash_choice(block: &str, prefix: &str) -> String {
-    if !block.starts_with('/') {
-        return prefix.to_string();
-    }
-    let after_slash = &block[1..];
-    let filter_end = after_slash
-        .find(char::is_whitespace)
-        .unwrap_or(after_slash.len());
-    // Drop the separator whitespace so we don't end up with "###  rest".
-    let trailing = after_slash[filter_end..].trim_start();
-    format!("{prefix}{trailing}")
-}
-
-/// Inverse of `apply_slash_choice` for the Esc-on-open case: strip the
-/// leading `/` and any non-whitespace text after it, leaving any
-/// surrounding whitespace intact. When the block has no leading `/`,
-/// it is returned unchanged.
 fn strip_slash_trigger(block: &str) -> String {
     let Some(after_slash) = block.strip_prefix('/') else {
         return block.to_string();
@@ -2227,7 +2753,7 @@ fn strip_slash_trigger(block: &str) -> String {
     let cut = after_slash
         .find(char::is_whitespace)
         .unwrap_or(after_slash.len());
-    after_slash[cut..].to_string()
+    after_slash[cut..].trim_start().to_string()
 }
 
 fn ensure_welcome_note(vault: &Path) -> anyhow::Result<()> {
@@ -2265,16 +2791,16 @@ mod tests {
 
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
-        app.blocks = vec!["# Primeira editada".to_string()];
+        app.blocks = vec![Block::h1("Primeira editada")];
         app.dirty = true;
 
         app.select_note(second.clone());
-        assert_eq!(app.blocks, vec!["# Segunda"]);
+        assert_eq!(app.blocks, vec![Block::h1("Segunda")]);
         assert!(app.drafts.contains_key(&first));
         assert_eq!(fs::read_to_string(&first).unwrap(), "# Primeira\n");
 
         app.select_note(first);
-        assert_eq!(app.blocks, vec!["# Primeira editada"]);
+        assert_eq!(app.blocks, vec![Block::h1("Primeira editada")]);
         assert!(app.dirty);
     }
 
@@ -2288,9 +2814,9 @@ mod tests {
 
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
-        app.blocks = vec!["nova 1".to_string()];
+        app.blocks = vec![Block::paragraph("nova 1")];
         app.dirty = true;
-        app.drafts.insert(second.clone(), vec!["nova 2".to_string()]);
+        app.drafts.insert(second.clone(), vec![Block::paragraph("nova 2")]);
 
         assert_eq!(app.unsaved_count(), 2);
         assert!(app.save_all_and_sync());
@@ -2331,19 +2857,19 @@ mod tests {
     #[test]
     fn blocks_from_content_splits_on_blank_lines() {
         let blocks = blocks_from_content("# Title\n\nparagraph\n\n- item");
-        assert_eq!(blocks, vec!["# Title", "paragraph", "- item"]);
+        assert_eq!(blocks, vec![Block::h1("Title"), Block::paragraph("paragraph"), Block::bullet("item")]);
     }
 
     #[test]
     fn blocks_from_content_keeps_single_newlines_within_a_block() {
         let blocks = blocks_from_content("- a\n- b\n- c\n\nnext paragraph");
-        assert_eq!(blocks, vec!["- a\n- b\n- c", "next paragraph"]);
+        assert_eq!(blocks, vec![Block::bullet("a"), Block::bullet("b"), Block::bullet("c"), Block::paragraph("next paragraph")]);
     }
 
     #[test]
     fn blocks_from_content_drops_blank_blocks_and_trims() {
         let blocks = blocks_from_content("  \n\n  # Title  \n\n\n\n  \n  text  ");
-        assert_eq!(blocks, vec!["# Title", "text"]);
+        assert_eq!(blocks, vec![Block::h1("Title"), Block::paragraph("text")]);
     }
 
     #[test]
@@ -2351,13 +2877,13 @@ mod tests {
         let blocks = blocks_from_content("intro\n\n```\nlet x = 1;\nlet y = 2;\n```\n\noutro");
         assert_eq!(
             blocks,
-            vec!["intro", "```\nlet x = 1;\nlet y = 2;\n```", "outro"]
+            vec![Block::paragraph("intro"), Block::code("", "let x = 1;\nlet y = 2;"), Block::paragraph("outro")]
         );
     }
 
     #[test]
     fn content_from_blocks_joins_with_blank_lines() {
-        let s = content_from_blocks(&["# Title".into(), "paragraph".into(), "- item".into()]);
+        let s = content_from_blocks(&[Block::h1("Title"), Block::paragraph("paragraph"), Block::bullet("item")]);
         assert_eq!(s, "# Title\n\nparagraph\n\n- item\n");
     }
 
@@ -2383,24 +2909,20 @@ mod tests {
     }
 
     #[test]
-    fn apply_slash_choice_replaces_just_the_trigger() {
-        assert_eq!(apply_slash_choice("/", "# "), "# ");
-        assert_eq!(apply_slash_choice("/he", "## "), "## ");
-        assert_eq!(apply_slash_choice("/h rest", "### "), "### rest");
-        assert_eq!(apply_slash_choice("/", ""), "");
-    }
-
-    #[test]
-    fn apply_slash_choice_is_a_noop_when_no_slash_trigger() {
-        assert_eq!(apply_slash_choice("hello", "# "), "# ");
-        assert_eq!(apply_slash_choice("", "- "), "- ");
+    fn blocks_from_content_handles_crlf_newlines() {
+        let content = "# Titulo Windows\r\n\r\nParagrafo 1\r\n\r\n- [ ] Tarefa CRLF";
+        let blocks = blocks_from_content(content);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], Block::h1("Titulo Windows"));
+        assert_eq!(blocks[1], Block::paragraph("Paragrafo 1"));
+        assert_eq!(blocks[2], Block::checklist(false, "Tarefa CRLF"));
     }
 
     #[test]
     fn strip_slash_trigger_removes_only_the_trigger() {
         assert_eq!(strip_slash_trigger("/"), "");
         assert_eq!(strip_slash_trigger("/he"), "");
-        assert_eq!(strip_slash_trigger("/he rest"), " rest");
+        assert_eq!(strip_slash_trigger("/he rest"), "rest");
         assert_eq!(strip_slash_trigger("hello"), "hello");
     }
 
@@ -2421,7 +2943,7 @@ mod tests {
         app.refresh_notes();
         assert!(app.notes.contains(&note_path));
 
-        app.drafts.insert(note_path.clone(), vec!["rascunho".to_string()]);
+        app.drafts.insert(note_path.clone(), vec![Block::paragraph("rascunho")]);
         app.delete_note(&note_path);
 
         assert!(!note_path.exists());
@@ -2452,8 +2974,8 @@ mod tests {
         app.new_note();
 
         assert_eq!(app.blocks.len(), 2);
-        assert_eq!(app.blocks[0], "# Nova nota");
-        assert_eq!(app.blocks[1], "");
+        assert_eq!(app.blocks[0], Block::h1("Nova nota"));
+        assert_eq!(app.blocks[1], Block::paragraph(""));
         assert_eq!(app.active_block, Some(1));
         assert_eq!(app.pending_focus, Some(1));
         assert!(app.dirty);
@@ -2471,9 +2993,10 @@ mod tests {
         app.select_note(note_path.clone());
 
         assert_eq!(app.selected, Some(note_path));
-        assert_eq!(app.blocks.len(), 2);
-        assert_eq!(app.blocks[0], "# Minha Nota");
-        assert_eq!(app.blocks[1], "- [ ] Tarefa 1\n- [x] Tarefa 2");
+        assert_eq!(app.blocks.len(), 3);
+        assert_eq!(app.blocks[0], Block::h1("Minha Nota"));
+        assert_eq!(app.blocks[1], Block::checklist(false, "Tarefa 1"));
+        assert_eq!(app.blocks[2], Block::checklist(true, "Tarefa 2"));
         assert_eq!(app.active_block, None);
         assert_eq!(app.pending_focus, None);
         assert!(!app.dirty);

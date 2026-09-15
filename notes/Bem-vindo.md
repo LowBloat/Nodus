@@ -1,11 +1,17 @@
 # Bem-vindo ao Nodus
 
-Este arquivo é Markdown puro e fica na pasta `notes`.
+Este arquivo é **Markdown puro** e fica na pasta `notes`.
 
-## Teste de sincronização
+## Conectar e sincronizar
 
 1. Abra o Nodus nas duas máquinas.
-2. Copie o código de cada uma para a outra.
-3. Edite esta nota e aguarde alguns segundos.
+2. Cole o código do PC1 no PC2.
+3. Aceite a solicitação que aparecer no PC1.
+4. Edite esta nota e pressione `Ctrl+S`.
 
-> Nesta primeira sprint, criação e edição de arquivos `.md` são sincronizadas.
+- [x] Arquivos Markdown comuns
+- [x] Sync P2P criptografado
+- [x] Pareamento com aprovação
+- [ ] Sua próxima ideia
+
+> Depois do primeiro sync, o Nodus sincroniza novamente quando você salva.

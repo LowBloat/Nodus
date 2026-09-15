@@ -328,6 +328,7 @@ pub fn serif_semibold(size: f32) -> FontId {
 // --- Layout constants ---------------------------------------------------------
 
 /// Magic-number layout values, consolidated so future tweaks live in one place.
+#[allow(dead_code)]
 pub mod layout {
     /// Inner padding inside the left sidebar (per side).
     pub const SIDEBAR_MARGIN: f32 = 18.0;
