@@ -269,3 +269,38 @@ pub fn serif_regular(size: f32) -> FontId {
 pub fn serif_semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(SOURCE_SERIF_SEMIBOLD.into()))
 }
+
+// --- Layout constants ---------------------------------------------------------
+
+/// Magic-number layout values, consolidated so future tweaks live in one place.
+pub mod layout {
+    /// Inner padding inside the left sidebar (per side).
+    pub const SIDEBAR_MARGIN: f32 = 18.0;
+    /// Default height of a sidebar note row.
+    pub const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
+    /// Minimum width for buttons inside the sidebar (avoids 0-width collapse).
+    pub const SIDEBAR_BUTTON_WIDTH_MIN: f32 = 180.0;
+    /// Allowed drag range for the sidebar.
+    pub const SIDEBAR_MIN_WIDTH: f32 = 200.0;
+    pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
+    /// Animation duration (seconds) for sidebar collapse/expand.
+    pub const SIDEBAR_ANIMATION_TIME: f32 = 0.18;
+
+    /// Inner padding inside the right sync panel (per side).
+    pub const SYNC_MARGIN: f32 = 20.0;
+    /// Default width of the sync panel when expanded.
+    pub const SYNC_WIDTH: f32 = 292.0;
+    /// Animation duration for sync panel collapse/expand.
+    pub const SYNC_ANIMATION_TIME: f32 = 0.18;
+
+    /// Max width of the centered "paper" inside the editor.
+    pub const PAPER_MAX_WIDTH: f32 = 860.0;
+    /// Vertical padding around the editor paper card.
+    pub const PAPER_VERTICAL_MARGIN: f32 = 22.0;
+    /// Horizontal padding around the editor paper card.
+    pub const PAPER_HORIZONTAL_MARGIN: f32 = 28.0;
+    /// Inner padding inside the paper card (symmetric x).
+    pub const PAPER_INNER_PADDING: f32 = 44.0;
+    /// Fixed width of the Save button in the editor header.
+    pub const SAVE_BUTTON_WIDTH: f32 = 126.0;
+}

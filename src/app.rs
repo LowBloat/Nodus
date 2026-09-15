@@ -27,23 +27,11 @@ enum StatusTone {
     Warning,
 }
 
-/// Sidebar layout. These are inlined here for now; commit 8 of the UI
-/// overhaul promotes them to `theme::layout`.
-const SIDEBAR_MARGIN: f32 = 18.0;
-const SIDEBAR_BUTTON_WIDTH_MIN: f32 = 180.0;
-const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
-const SIDEBAR_MIN_WIDTH: f32 = 200.0;
-const SIDEBAR_MAX_WIDTH: f32 = 440.0;
-const SIDEBAR_ANIMATION_TIME: f32 = 0.18;
-const SYNC_MARGIN: f32 = 20.0;
-const SYNC_WIDTH: f32 = 292.0;
-const SYNC_ANIMATION_TIME: f32 = 0.18;
-
 /// Compute the available width inside a left/right panel given its total
 /// width and side margin. Clamped to a sensible minimum so buttons never
 /// collapse to zero pixels.
 fn inner_width_for(panel_width: f32, margin: f32) -> f32 {
-    (panel_width - 2.0 * margin - 8.0).max(SIDEBAR_BUTTON_WIDTH_MIN)
+    (panel_width - 2.0 * margin - 8.0).max(theme::layout::SIDEBAR_BUTTON_WIDTH_MIN)
 }
 
 pub struct NodusApp {
@@ -640,14 +628,14 @@ impl NodusApp {
         let width = ctx.animate_value_with_time(
             egui::Id::new("sidebar-width"),
             target_width,
-            SIDEBAR_ANIMATION_TIME,
+            theme::layout::SIDEBAR_ANIMATION_TIME,
         );
 
         let response = egui::Panel::left("notes")
             .resizable(sidebar_visible)
             .default_size(width)
             .size_range(if sidebar_visible {
-                SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH
+                theme::layout::SIDEBAR_MIN_WIDTH..=theme::layout::SIDEBAR_MAX_WIDTH
             } else {
                 0.0..=0.0
             })
@@ -655,10 +643,10 @@ impl NodusApp {
             .frame(
                 egui::Frame::new()
                     .fill(SIDEBAR)
-                    .inner_margin(egui::Margin::same(SIDEBAR_MARGIN as i8)),
+                    .inner_margin(egui::Margin::same(theme::layout::SIDEBAR_MARGIN as i8)),
             )
             .show(root_ui, |ui| {
-                let inner_width = inner_width_for(width, SIDEBAR_MARGIN);
+                let inner_width = inner_width_for(width, theme::layout::SIDEBAR_MARGIN);
 
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Nodus").font(ui_semibold(21.0)).color(INK));
@@ -764,7 +752,7 @@ impl NodusApp {
                             Stroke::NONE
                         })
                         .corner_radius(7.0);
-                        if ui.add_sized([inner_width, SIDEBAR_ROW_HEIGHT], button).clicked() {
+                        if ui.add_sized([inner_width, theme::layout::SIDEBAR_ROW_HEIGHT], button).clicked() {
                             self.select_note(path);
                         }
                     }
@@ -793,11 +781,11 @@ impl NodusApp {
     fn render_sync_panel(&mut self, root_ui: &mut egui::Ui) {
         let ctx = root_ui.ctx().clone();
         let sync_visible = self.settings.ui.sync_panel_visible;
-        let target_width = if sync_visible { SYNC_WIDTH } else { 0.0 };
+        let target_width = if sync_visible { theme::layout::SYNC_WIDTH } else { 0.0 };
         let width = ctx.animate_value_with_time(
             egui::Id::new("sync-width"),
             target_width,
-            SYNC_ANIMATION_TIME,
+            theme::layout::SYNC_ANIMATION_TIME,
         );
 
         // Skip rendering entirely while collapsed (saves layout work and avoids
@@ -806,7 +794,7 @@ impl NodusApp {
             return;
         }
 
-        let inner_width = inner_width_for(width, SYNC_MARGIN);
+        let inner_width = inner_width_for(width, theme::layout::SYNC_MARGIN);
 
         egui::Panel::right("sync")
             .exact_size(width)
@@ -815,7 +803,7 @@ impl NodusApp {
                 egui::Frame::new()
                     .fill(PAPER)
                     .stroke(Stroke::new(1.0, BORDER))
-                    .inner_margin(egui::Margin::same(SYNC_MARGIN as i8)),
+                    .inner_margin(egui::Margin::same(theme::layout::SYNC_MARGIN as i8)),
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1027,7 +1015,10 @@ impl NodusApp {
             .frame(
                 egui::Frame::new()
                     .fill(APP_BG)
-                    .inner_margin(egui::Margin::symmetric(28, 22)),
+                    .inner_margin(egui::Margin::symmetric(
+                        theme::layout::PAPER_HORIZONTAL_MARGIN as i8,
+                        theme::layout::PAPER_VERTICAL_MARGIN as i8,
+                    )),
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1066,7 +1057,13 @@ impl NodusApp {
                         .fill(ACCENT)
                         .stroke(Stroke::NONE)
                         .corner_radius(7.0);
-                        if ui.add_sized([126.0, 34.0], save).clicked() {
+                        if ui
+                            .add_sized(
+                                [theme::layout::SAVE_BUTTON_WIDTH, 34.0],
+                                save,
+                            )
+                            .clicked()
+                        {
                             self.save_and_sync();
                         }
                         ui.add_space(8.0);
@@ -1114,7 +1111,7 @@ impl NodusApp {
                 ui.add_space(14.0);
 
                 let available = ui.available_size();
-                let page_width = available.x.min(860.0);
+                let page_width = available.x.min(theme::layout::PAPER_MAX_WIDTH);
                 let side_space = ((available.x - page_width) / 2.0).max(0.0);
                 ui.horizontal_top(|ui| {
                     ui.add_space(side_space);
@@ -1128,9 +1125,15 @@ impl NodusApp {
                             spread: 0,
                             color: Color32::from_black_alpha(14),
                         })
-                        .inner_margin(egui::Margin::symmetric(44, 34))
+                        .inner_margin(egui::Margin::symmetric(
+                            theme::layout::PAPER_INNER_PADDING as i8,
+                            34,
+                        ))
                         .show(ui, |ui| {
-                            ui.set_width((page_width - 88.0).max(200.0));
+                            ui.set_width(
+                                (page_width - 2.0 * theme::layout::PAPER_INNER_PADDING)
+                                    .max(200.0),
+                            );
                             ui.set_min_height((available.y - 4.0).max(260.0));
                             if self.settings.ui.editor_mode == EditorMode::Preview {
                                 let implicit_uri = self
