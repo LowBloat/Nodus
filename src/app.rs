@@ -35,6 +35,9 @@ const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
 const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SIDEBAR_MAX_WIDTH: f32 = 440.0;
 const SIDEBAR_ANIMATION_TIME: f32 = 0.18;
+const SYNC_MARGIN: f32 = 20.0;
+const SYNC_WIDTH: f32 = 292.0;
+const SYNC_ANIMATION_TIME: f32 = 0.18;
 
 /// Compute the available width inside a left/right panel given its total
 /// width and side margin. Clamped to a sensible minimum so buttons never
@@ -792,17 +795,50 @@ impl NodusApp {
 
     fn render_sync_panel(&mut self, root_ui: &mut egui::Ui) {
         let ctx = root_ui.ctx().clone();
+        let sync_visible = self.settings.ui.sync_panel_visible;
+        let target_width = if sync_visible { SYNC_WIDTH } else { 0.0 };
+        let width = ctx.animate_value_with_time(
+            egui::Id::new("sync-width"),
+            target_width,
+            SYNC_ANIMATION_TIME,
+        );
+
+        // Skip rendering entirely while collapsed (saves layout work and avoids
+        // a 1-pixel sliver).
+        if width < 1.0 {
+            return;
+        }
+
+        let inner_width = inner_width_for(width, SYNC_MARGIN);
+
         egui::Panel::right("sync")
-            .exact_size(292.0)
+            .exact_size(width)
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(PAPER)
                     .stroke(Stroke::new(1.0, BORDER))
-                    .inner_margin(egui::Margin::same(20)),
+                    .inner_margin(egui::Margin::same(SYNC_MARGIN as i8)),
             )
             .show(root_ui, |ui| {
-                ui.label(RichText::new("Sync").font(ui_semibold(20.0)).color(INK));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Sync").font(ui_semibold(20.0)).color(INK));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let chevron = egui::Button::new(
+                            RichText::new("›").font(ui_semibold(16.0)).color(MUTED),
+                        )
+                        .frame(false)
+                        .fill(Color32::TRANSPARENT);
+                        if ui
+                            .add(chevron)
+                            .on_hover_text("Ocultar painel de sync (Ctrl+Shift+P)")
+                            .clicked()
+                        {
+                            self.settings.ui.sync_panel_visible = false;
+                            self.save_ui_prefs();
+                        }
+                    });
+                });
                 ui.add_space(10.0);
                 let (status_bg, status_color) = match self.sync_tone {
                     StatusTone::Neutral => (APP_BG, MUTED),
@@ -815,7 +851,7 @@ impl NodusApp {
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        ui.set_width(228.0);
+                        ui.set_width(inner_width);
                         ui.label(
                             RichText::new(&self.sync_status)
                                 .font(ui_medium(12.5))
@@ -856,7 +892,7 @@ impl NodusApp {
                             .corner_radius(7.0)
                             .inner_margin(egui::Margin::symmetric(10, 8))
                             .show(ui, |ui| {
-                                ui.set_width(232.0);
+                                ui.set_width(inner_width);
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(&peer.name).font(ui_medium(13.0)).color(INK),
@@ -887,7 +923,7 @@ impl NodusApp {
                 };
                 if ui
                     .add_sized(
-                        [250.0, 36.0],
+                        [inner_width, 36.0],
                         egui::Button::new(RichText::new(pairing_label).font(ui_medium(12.5)))
                             .fill(if self.pairing_expanded {
                                 APP_BG
@@ -918,7 +954,7 @@ impl NodusApp {
                         ui.add_space(7.0);
                         let mut shown_code = self.pair_code.clone();
                         ui.add_sized(
-                            [250.0, 54.0],
+                            [inner_width, 54.0],
                             egui::TextEdit::multiline(&mut shown_code)
                                 .font(FontId::monospace(9.5))
                                 .interactive(false)
@@ -927,7 +963,7 @@ impl NodusApp {
                         );
                         if ui
                             .add_sized(
-                                [250.0, 32.0],
+                                [inner_width, 32.0],
                                 egui::Button::new(
                                     RichText::new("Copiar código").font(ui_medium(12.0)),
                                 ),
@@ -946,7 +982,7 @@ impl NodusApp {
                         );
                         ui.add_space(7.0);
                         ui.add_sized(
-                            [250.0, 54.0],
+                            [inner_width, 54.0],
                             egui::TextEdit::multiline(&mut self.pair_input)
                                 .font(FontId::monospace(9.5))
                                 .hint_text("NODUS2...")
@@ -966,7 +1002,7 @@ impl NodusApp {
                                 .fill(ACCENT)
                                 .stroke(Stroke::NONE)
                                 .corner_radius(7.0)
-                                .min_size([250.0, 36.0].into()),
+                                .min_size([inner_width, 36.0].into()),
                             )
                             .clicked()
                         {
