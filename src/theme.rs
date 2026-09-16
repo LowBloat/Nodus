@@ -13,14 +13,14 @@ use eframe::egui::{
 
 // --- Color palette (light mode, the only mode today) ----------------------------
 
-pub const APP_BG: Color32 = Color32::from_rgb(244, 247, 251);
+pub const APP_BG: Color32 = Color32::from_rgb(247, 248, 250);
 pub const PAPER: Color32 = Color32::from_rgb(255, 255, 255);
-pub const SIDEBAR: Color32 = Color32::from_rgb(234, 240, 246);
-pub const INK: Color32 = Color32::from_rgb(24, 34, 48);
-pub const MUTED: Color32 = Color32::from_rgb(98, 108, 129);
-pub const BORDER: Color32 = Color32::from_rgb(220, 227, 236);
-pub const ACCENT: Color32 = Color32::from_rgb(50, 103, 227);
-pub const ACCENT_HOVER: Color32 = Color32::from_rgb(39, 86, 199);
+pub const SIDEBAR: Color32 = Color32::from_rgb(240, 242, 246);
+pub const INK: Color32 = Color32::from_rgb(27, 31, 40);
+pub const MUTED: Color32 = Color32::from_rgb(103, 111, 127);
+pub const BORDER: Color32 = Color32::from_rgb(220, 225, 233);
+pub const ACCENT: Color32 = Color32::from_rgb(68, 110, 231);
+pub const ACCENT_HOVER: Color32 = Color32::from_rgb(54, 91, 204);
 pub const SUCCESS: Color32 = Color32::from_rgb(35, 122, 87);
 pub const WARNING: Color32 = Color32::from_rgb(181, 71, 8);
 pub const SOFT_BLUE: Color32 = Color32::from_rgb(232, 239, 255);
@@ -29,14 +29,14 @@ pub const SOFT_WARNING: Color32 = Color32::from_rgb(255, 243, 230);
 
 // --- Dark mode palette --------------------------------------------------------
 
-pub const DARK_BG: Color32 = Color32::from_rgb(26, 29, 36);
-pub const DARK_SURFACE: Color32 = Color32::from_rgb(35, 39, 48);
-pub const DARK_SIDEBAR: Color32 = Color32::from_rgb(31, 34, 41);
-pub const DARK_INK: Color32 = Color32::from_rgb(230, 233, 239);
-pub const DARK_MUTED: Color32 = Color32::from_rgb(139, 148, 166);
-pub const DARK_BORDER: Color32 = Color32::from_rgb(46, 51, 64);
-pub const DARK_ACCENT: Color32 = Color32::from_rgb(111, 147, 255);
-pub const DARK_ACCENT_HOVER: Color32 = Color32::from_rgb(138, 170, 255);
+pub const DARK_BG: Color32 = Color32::from_rgb(19, 22, 28);
+pub const DARK_SURFACE: Color32 = Color32::from_rgb(25, 29, 37);
+pub const DARK_SIDEBAR: Color32 = Color32::from_rgb(22, 25, 32);
+pub const DARK_INK: Color32 = Color32::from_rgb(238, 241, 246);
+pub const DARK_MUTED: Color32 = Color32::from_rgb(151, 158, 174);
+pub const DARK_BORDER: Color32 = Color32::from_rgb(45, 51, 64);
+pub const DARK_ACCENT: Color32 = Color32::from_rgb(115, 150, 255);
+pub const DARK_ACCENT_HOVER: Color32 = Color32::from_rgb(139, 171, 255);
 pub const DARK_SUCCESS: Color32 = Color32::from_rgb(92, 199, 143);
 pub const DARK_WARNING: Color32 = Color32::from_rgb(255, 154, 77);
 pub const DARK_SOFT_BLUE: Color32 = Color32::from_rgb(31, 42, 63);
@@ -74,6 +74,9 @@ pub struct Palette {
     pub soft_blue: Color32,
     pub soft_green: Color32,
     pub soft_warning: Color32,
+    pub surface_hover: Color32,
+    pub surface_active: Color32,
+    pub shadow: Color32,
     /// Marker so callers (and tests) can know which palette they got.
     pub dark: bool,
 }
@@ -94,6 +97,9 @@ impl Palette {
             soft_blue: SOFT_BLUE,
             soft_green: SOFT_GREEN,
             soft_warning: SOFT_WARNING,
+            surface_hover: Color32::from_rgb(234, 237, 243),
+            surface_active: Color32::from_rgb(224, 229, 239),
+            shadow: Color32::from_black_alpha(32),
             dark: false,
         }
     }
@@ -113,6 +119,9 @@ impl Palette {
             soft_blue: DARK_SOFT_BLUE,
             soft_green: DARK_SOFT_GREEN,
             soft_warning: DARK_SOFT_WARNING,
+            surface_hover: Color32::from_rgb(34, 39, 50),
+            surface_active: Color32::from_rgb(43, 49, 63),
+            shadow: Color32::from_black_alpha(120),
             dark: true,
         }
     }
@@ -233,20 +242,40 @@ fn configure_style(style: &mut egui::Style, palette: &Palette) {
     };
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette.border);
     style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.ink);
-    style.visuals.widgets.hovered.bg_fill = palette.soft_blue;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.accent);
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, palette.accent);
-    style.visuals.widgets.active.bg_fill = palette.accent_hover;
+    style.visuals.widgets.hovered.bg_fill = palette.surface_hover;
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.border);
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, palette.ink);
+    style.visuals.widgets.active.bg_fill = palette.surface_active;
     style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.accent);
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.5, palette.ink);
     style.visuals.selection.bg_fill = if palette.dark {
         palette.soft_blue
     } else {
         Color32::from_rgb(196, 214, 255)
     };
     style.visuals.selection.stroke = Stroke::new(1.0, palette.accent);
+    style.visuals.window_corner_radius = egui::CornerRadius::same(10);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    style.visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 8],
+        blur: 28,
+        spread: 0,
+        color: palette.shadow,
+    };
+    style.visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 18,
+        spread: 0,
+        color: palette.shadow,
+    };
     style.visuals.hyperlink_color = palette.accent;
     style.visuals.override_text_color = Some(palette.ink);
+    let radius = egui::CornerRadius::same(7);
+    style.visuals.widgets.noninteractive.corner_radius = radius;
+    style.visuals.widgets.inactive.corner_radius = radius;
+    style.visuals.widgets.hovered.corner_radius = radius;
+    style.visuals.widgets.active.corner_radius = radius;
+    style.visuals.widgets.open.corner_radius = radius;
     style.text_styles.insert(TextStyle::Body, ui_regular(14.0));
     style.text_styles.insert(TextStyle::Button, ui_medium(13.5));
     style
@@ -332,22 +361,25 @@ pub fn serif_semibold(size: f32) -> FontId {
 /// Magic-number layout values, consolidated so future tweaks live in one place.
 #[allow(dead_code)]
 pub mod layout {
+    pub const TITLEBAR_HEIGHT: f32 = 36.0;
+    pub const TOOLBAR_HEIGHT: f32 = 50.0;
+    pub const TABBAR_HEIGHT: f32 = 36.0;
     /// Inner padding inside the left sidebar (per side).
-    pub const SIDEBAR_MARGIN: f32 = 18.0;
+    pub const SIDEBAR_MARGIN: f32 = 14.0;
     /// Default height of a sidebar note row.
     pub const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
     /// Minimum width for buttons inside the sidebar (avoids 0-width collapse).
     pub const SIDEBAR_BUTTON_WIDTH_MIN: f32 = 180.0;
     /// Allowed drag range for the sidebar.
-    pub const SIDEBAR_MIN_WIDTH: f32 = 200.0;
-    pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
+    pub const SIDEBAR_MIN_WIDTH: f32 = 220.0;
+    pub const SIDEBAR_MAX_WIDTH: f32 = 420.0;
     /// Animation duration (seconds) for sidebar collapse/expand.
     pub const SIDEBAR_ANIMATION_TIME: f32 = 0.18;
 
     /// Inner padding inside the right sync panel (per side).
-    pub const SYNC_MARGIN: f32 = 20.0;
+    pub const SYNC_MARGIN: f32 = 16.0;
     /// Default width of the sync panel when expanded.
-    pub const SYNC_WIDTH: f32 = 292.0;
+    pub const SYNC_WIDTH: f32 = 320.0;
     /// Animation duration for sync panel collapse/expand.
     pub const SYNC_ANIMATION_TIME: f32 = 0.18;
 }

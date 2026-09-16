@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod network;
 mod theme;
+mod ui_foundation;
 mod vault;
 
 use anyhow::Context;
@@ -13,8 +14,9 @@ fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Nodus")
+            .with_decorations(false)
             .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([1100.0, 650.0]),
+            .with_min_inner_size([900.0, 620.0]),
         ..Default::default()
     };
 

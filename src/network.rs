@@ -58,6 +58,14 @@ enum NetworkCommand {
     AnswerPair { request_id: String, accept: bool },
 }
 
+struct NetworkIdentity {
+    device_name: String,
+    secret_key: SecretKey,
+    pairing_token: String,
+    vault_id: String,
+    vault_name: String,
+}
+
 pub struct NetworkService {
     peers: Arc<RwLock<Vec<PeerConfig>>>,
     commands: tokio::sync::mpsc::UnboundedSender<NetworkCommand>,
@@ -88,13 +96,16 @@ impl NetworkService {
                     .build();
                 match runtime {
                     Ok(runtime) => {
-                        if let Err(error) = runtime.block_on(run_network(
-                            vault,
+                        let identity = NetworkIdentity {
                             device_name,
                             secret_key,
                             pairing_token,
                             vault_id,
                             vault_name,
+                        };
+                        if let Err(error) = runtime.block_on(run_network(
+                            vault,
+                            identity,
                             worker_peers,
                             command_rx,
                             event_tx.clone(),
@@ -164,15 +175,18 @@ enum Packet {
 
 async fn run_network(
     vault: PathBuf,
-    device_name: String,
-    secret_key: SecretKey,
-    pairing_token: String,
-    vault_id: String,
-    vault_name: String,
+    identity: NetworkIdentity,
     peers: Arc<RwLock<Vec<PeerConfig>>>,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<NetworkCommand>,
     events: mpsc::Sender<NetworkEvent>,
 ) -> anyhow::Result<()> {
+    let NetworkIdentity {
+        device_name,
+        secret_key,
+        pairing_token,
+        vault_id,
+        vault_name,
+    } = identity;
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret_key)
         .alpns(vec![ALPN.to_vec()])

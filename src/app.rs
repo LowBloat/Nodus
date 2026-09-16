@@ -15,6 +15,7 @@ use crate::{
     theme::{
         self, install_fonts, serif_regular, serif_semibold, ui_medium, ui_regular, ui_semibold,
     },
+    ui_foundation::{self as chrome, Icon},
     vault,
 };
 
@@ -765,6 +766,78 @@ impl NodusApp {
         self.last_toggle_at = Some(Instant::now());
     }
 
+    fn render_titlebar(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
+        let ctx = root_ui.ctx().clone();
+        egui::Panel::top("window-titlebar")
+            .exact_size(theme::layout::TITLEBAR_HEIGHT)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.sidebar)
+                    .inner_margin(egui::Margin::symmetric(10, 3)),
+            )
+            .show(root_ui, |ui| {
+                let drag_rect = ui.max_rect();
+                let drag = ui.interact(
+                    drag_rect,
+                    ui.id().with("window-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if drag.double_clicked() {
+                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+
+                ui.horizontal(|ui| {
+                    let mark_rect = ui
+                        .allocate_exact_size(egui::vec2(22.0, 24.0), egui::Sense::hover())
+                        .0;
+                    let mark_center = mark_rect.center();
+                    ui.painter().circle_filled(
+                        egui::pos2(mark_center.x - 3.0, mark_center.y),
+                        4.0,
+                        palette.accent,
+                    );
+                    ui.painter().circle_stroke(
+                        egui::pos2(mark_center.x + 3.0, mark_center.y),
+                        5.0,
+                        Stroke::new(1.5, palette.muted),
+                    );
+                    ui.label(
+                        RichText::new("Nodus")
+                            .font(ui_semibold(12.5))
+                            .color(palette.ink),
+                    );
+                    ui.label(
+                        RichText::new("notas locais, conectadas")
+                            .font(ui_regular(11.0))
+                            .color(palette.muted),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if chrome::compact_icon_button(ui, Icon::Close, "Fechar", palette).clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if chrome::compact_icon_button(ui, Icon::Maximize, "Maximizar", palette)
+                            .clicked()
+                        {
+                            let maximized =
+                                ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                        }
+                        if chrome::compact_icon_button(ui, Icon::Minimize, "Minimizar", palette)
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                    });
+                });
+            });
+    }
+
     fn render_topbar(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         let ctx = root_ui.ctx().clone();
         let sidebar_visible = self.settings.ui.sidebar_visible;
@@ -783,31 +856,22 @@ impl NodusApp {
         let mut choose_vault = false;
 
         egui::Panel::top("topbar")
+            .exact_size(theme::layout::TOOLBAR_HEIGHT)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.bg)
-                    .inner_margin(egui::Margin::symmetric(14, 9)),
+                    .fill(palette.sidebar)
+                    .stroke(Stroke::new(1.0, palette.border))
+                    .inner_margin(egui::Margin::symmetric(12, 9)),
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Left: toggle sidebar button.
-                    let sidebar_icon = if sidebar_visible { "Painel" } else { "Notas" };
+                    let compact_toolbar = ui.available_width() < 1080.0;
                     let sidebar_tip = if sidebar_visible {
                         "Ocultar sidebar (Ctrl+B)"
                     } else {
                         "Mostrar sidebar (Ctrl+B)"
                     };
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(sidebar_icon)
-                                    .font(ui_semibold(15.0))
-                                    .color(palette.muted),
-                            )
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                        )
-                        .on_hover_text(sidebar_tip)
+                    if chrome::icon_button(ui, Icon::Sidebar, sidebar_visible, sidebar_tip, palette)
                         .clicked()
                     {
                         self.settings.ui.sidebar_visible = !self.settings.ui.sidebar_visible;
@@ -838,28 +902,23 @@ impl NodusApp {
                         },
                     );
 
-                    if let Some(selected_path) = &self.selected {
-                        ui.label(
-                            RichText::new("/")
-                                .font(ui_regular(12.0))
-                                .color(palette.border),
-                        );
-                        let file_name = selected_path
-                            .file_name()
-                            .and_then(|v| v.to_str())
-                            .unwrap_or("Nota");
-                        let clean_title = file_name.strip_suffix(".md").unwrap_or(file_name);
-                        ui.label(
-                            RichText::new(clean_title)
-                                .font(ui_semibold(13.5))
-                                .color(palette.ink),
-                        );
-                    }
-
-                    ui.add_space(14.0);
+                    ui.add_space(10.0);
 
                     // Search field with clear button.
-                    let search_width = 220.0_f32.min(ui.available_width() * 0.32);
+                    chrome::paint_icon(
+                        ui,
+                        Icon::Search,
+                        egui::pos2(ui.cursor().left() + 8.0, ui.cursor().center().y),
+                        13.0,
+                        palette.muted,
+                    );
+                    ui.add_space(12.0);
+                    let search_width = (if compact_toolbar {
+                        150.0_f32
+                    } else {
+                        220.0_f32
+                    })
+                    .min(ui.available_width() * 0.32);
                     let search_response = ui.add_sized(
                         [search_width, 28.0],
                         egui::TextEdit::singleline(&mut self.search)
@@ -894,41 +953,45 @@ impl NodusApp {
                     // View mode segmented control (Notion / Split / Preview).
                     let current_mode = self.settings.ui.view_mode;
                     egui::Frame::new()
-                        .fill(palette.surface)
-                        .stroke(Stroke::new(1.0, palette.border))
-                        .corner_radius(7.0)
+                        .fill(palette.bg)
+                        .corner_radius(8.0)
                         .inner_margin(egui::Margin::symmetric(3, 2))
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
                             let modes = [
-                                (ViewMode::Notion, "Escrever", "Editor em blocos (Ctrl+E)"),
+                                (
+                                    ViewMode::Notion,
+                                    Icon::Write,
+                                    "Escrever",
+                                    "Editor em blocos (Ctrl+E)",
+                                ),
                                 (
                                     ViewMode::Split,
+                                    Icon::Split,
                                     "Dividir",
                                     "Markdown e leitura lado a lado (Ctrl+E)",
                                 ),
-                                (ViewMode::Preview, "Ler", "Leitura do Markdown (Ctrl+E)"),
+                                (
+                                    ViewMode::Preview,
+                                    Icon::Read,
+                                    "Ler",
+                                    "Leitura do Markdown (Ctrl+E)",
+                                ),
                             ];
-                            for (mode, label, tip) in modes {
+                            for (mode, icon, label, tip) in modes {
                                 let active = current_mode == mode;
-                                let (bg, fg) = if active {
-                                    (palette.soft_blue, palette.accent)
-                                } else {
-                                    (Color32::TRANSPARENT, palette.muted)
-                                };
-                                let btn = egui::Button::new(
-                                    RichText::new(label)
-                                        .font(if active {
-                                            ui_medium(11.5)
-                                        } else {
-                                            ui_regular(11.5)
-                                        })
-                                        .color(fg),
+                                let shown_label = if compact_toolbar { "" } else { label };
+                                if chrome::segment_button(
+                                    ui,
+                                    icon,
+                                    shown_label,
+                                    active,
+                                    tip,
+                                    palette,
                                 )
-                                .fill(bg)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(5.0);
-                                if ui.add(btn).on_hover_text(tip).clicked() && !active {
+                                .clicked()
+                                    && !active
+                                {
                                     if mode == ViewMode::Split {
                                         self.full_editor_text = content_from_blocks(&self.blocks);
                                     } else if current_mode == ViewMode::Split {
@@ -942,23 +1005,14 @@ impl NodusApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Sync panel toggle.
-                        let sync_label = if self.settings.ui.sync_panel_visible {
-                            "Sync ✓"
-                        } else {
-                            "Sync"
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(sync_label)
-                                        .font(ui_medium(12.0))
-                                        .color(palette.ink),
-                                )
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
-                            )
-                            .on_hover_text("Alternar painel de sincronização (Ctrl+Shift+P)")
-                            .clicked()
+                        if chrome::icon_button(
+                            ui,
+                            Icon::PanelRight,
+                            self.settings.ui.sync_panel_visible,
+                            "Alternar painel de sincronização (Ctrl+Shift+P)",
+                            palette,
+                        )
+                        .clicked()
                         {
                             self.settings.ui.sync_panel_visible =
                                 !self.settings.ui.sync_panel_visible;
@@ -969,26 +1023,16 @@ impl NodusApp {
                         ui.add_space(8.0);
 
                         // Theme cycle button: Light → Dark → System → Light.
-                        let (theme_glyph, theme_tooltip) = match self.settings.ui.theme {
+                        let (theme_icon, theme_tooltip) = match self.settings.ui.theme {
                             ThemeMode::System => {
-                                ("Sistema", "Tema: seguir sistema — clique para claro")
+                                (Icon::Monitor, "Tema: seguir sistema — clique para claro")
                             }
-                            ThemeMode::Light => ("Claro", "Tema: claro — clique para escuro"),
+                            ThemeMode::Light => (Icon::Sun, "Tema: claro — clique para escuro"),
                             ThemeMode::Dark => {
-                                ("Escuro", "Tema: escuro — clique para seguir sistema")
+                                (Icon::Moon, "Tema: escuro — clique para seguir sistema")
                             }
                         };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(theme_glyph)
-                                        .font(ui_regular(15.0))
-                                        .color(palette.ink),
-                                )
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
-                            )
-                            .on_hover_text(theme_tooltip)
+                        if chrome::icon_button(ui, theme_icon, false, theme_tooltip, palette)
                             .clicked()
                         {
                             let next = match self.settings.ui.theme {
@@ -1042,8 +1086,10 @@ impl NodusApp {
     fn render_sidebar(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         let ctx = root_ui.ctx().clone();
         let sidebar_visible = self.settings.ui.sidebar_visible;
+        let responsive_sidebar_max =
+            (ctx.content_rect().width() * 0.32).max(theme::layout::SIDEBAR_MIN_WIDTH);
         let target_width = if sidebar_visible {
-            self.settings.ui.sidebar_width
+            self.settings.ui.sidebar_width.min(responsive_sidebar_max)
         } else {
             0.0
         };
@@ -1052,10 +1098,19 @@ impl NodusApp {
             target_width,
             theme::layout::SIDEBAR_ANIMATION_TIME,
         );
+        if width < 1.0 {
+            return;
+        }
 
         let mut note_to_select: Option<PathBuf> = None;
         let mut note_to_delete: Option<PathBuf> = None;
-        let active_path = self.active_vault_path().map(display_path);
+        let active_root = self.active_vault_path().map(Path::to_path_buf);
+        let active_path = active_root.as_ref().map(|path| display_path(path));
+        let active_vault_name = self
+            .settings
+            .active_vault()
+            .map(|vault| vault.name.clone())
+            .unwrap_or_else(|| "Vault".to_owned());
 
         let response = egui::Panel::left("notes")
             .resizable(sidebar_visible)
@@ -1075,42 +1130,37 @@ impl NodusApp {
                 let inner_width = inner_width_for(width, theme::layout::SIDEBAR_MARGIN);
 
                 ui.horizontal(|ui| {
+                    let icon_rect = ui
+                        .allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover())
+                        .0;
+                    chrome::paint_icon(ui, Icon::Folder, icon_rect.center(), 16.0, palette.accent);
                     ui.label(
-                        RichText::new("Nodus")
-                            .font(ui_semibold(21.0))
+                        RichText::new(&active_vault_name)
+                            .font(ui_semibold(15.0))
                             .color(palette.ink),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let chevron = egui::Button::new(
-                            RichText::new("‹")
-                                .font(ui_semibold(16.0))
-                                .color(palette.muted),
+                        if chrome::compact_icon_button(
+                            ui,
+                            Icon::ChevronLeft,
+                            "Ocultar sidebar (Ctrl+B)",
+                            palette,
                         )
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT);
-                        if ui
-                            .add(chevron)
-                            .on_hover_text("Ocultar sidebar (Ctrl+B)")
-                            .clicked()
+                        .clicked()
                         {
                             self.settings.ui.sidebar_visible = false;
                             self.note_panel_toggle();
                             self.save_ui_prefs();
                         }
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("local-first")
-                                .font(ui_regular(11.0))
-                                .color(palette.muted),
-                        );
                     });
                 });
                 if let Some(path) = &active_path {
                     ui.label(
-                        RichText::new(path)
+                        RichText::new(format!("{} notas · local", self.notes.len()))
                             .font(ui_regular(10.5))
                             .color(palette.muted),
-                    );
+                    )
+                    .on_hover_text(path);
                 }
                 ui.add_space(12.0);
 
@@ -1119,17 +1169,13 @@ impl NodusApp {
                     egui::Layout::top_down(egui::Align::Center),
                     |ui| {
                         let new_note_btn = egui::Button::new(
-                            RichText::new("+  Nova nota")
+                            RichText::new("＋  Nova nota")
                                 .font(ui_medium(13.0))
-                                .color(palette.accent),
+                                .color(Color32::WHITE),
                         )
-                        .fill(if palette.dark {
-                            Color32::from_rgb(33, 43, 62)
-                        } else {
-                            palette.soft_blue
-                        })
-                        .stroke(Stroke::new(1.0, palette.accent.gamma_multiply(0.35)))
-                        .corner_radius(6.0);
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(7.0);
                         if ui
                             .add_enabled_ui(active_path.is_some(), |ui| {
                                 ui.add_sized([inner_width, 34.0], new_note_btn)
@@ -1144,15 +1190,11 @@ impl NodusApp {
                 );
 
                 ui.add_space(14.0);
-                ui.label(
-                    RichText::new("Notas")
-                        .font(ui_semibold(12.0))
-                        .color(palette.muted),
-                );
+                chrome::section_label(ui, "Arquivos", palette);
                 ui.add_space(4.0);
 
                 let query = self.search.trim().to_lowercase();
-                let notes: Vec<_> = self
+                let mut notes: Vec<_> = self
                     .notes
                     .iter()
                     .filter(|path| {
@@ -1164,8 +1206,56 @@ impl NodusApp {
                     })
                     .cloned()
                     .collect();
+                notes.sort_by_key(|path| {
+                    active_root
+                        .as_ref()
+                        .and_then(|root| path.strip_prefix(root).ok())
+                        .unwrap_or(path)
+                        .to_path_buf()
+                });
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut shown_parent: Option<PathBuf> = None;
                     for path in notes {
+                        let relative = active_root
+                            .as_ref()
+                            .and_then(|root| path.strip_prefix(root).ok())
+                            .unwrap_or(path.as_path());
+                        let parent = relative
+                            .parent()
+                            .filter(|parent| !parent.as_os_str().is_empty());
+                        if parent.map(Path::to_path_buf) != shown_parent {
+                            shown_parent = parent.map(Path::to_path_buf);
+                            if let Some(folder) = parent {
+                                ui.add_space(5.0);
+                                ui.horizontal(|ui| {
+                                    let depth = folder.components().count().saturating_sub(1);
+                                    ui.add_space(depth as f32 * 12.0);
+                                    let folder_rect = ui
+                                        .allocate_exact_size(
+                                            egui::vec2(20.0, 20.0),
+                                            egui::Sense::hover(),
+                                        )
+                                        .0;
+                                    chrome::paint_icon(
+                                        ui,
+                                        Icon::Folder,
+                                        folder_rect.center(),
+                                        13.0,
+                                        palette.muted,
+                                    );
+                                    ui.label(
+                                        RichText::new(
+                                            folder
+                                                .file_name()
+                                                .and_then(|name| name.to_str())
+                                                .unwrap_or("Pasta"),
+                                        )
+                                        .font(ui_medium(11.5))
+                                        .color(palette.muted),
+                                    );
+                                });
+                            }
+                        }
                         let selected = self.selected.as_ref() == Some(&path);
                         let unsaved = self.note_is_unsaved(&path);
                         let file_name = path
@@ -1174,21 +1264,18 @@ impl NodusApp {
                             .unwrap_or("Nota");
                         let clean_title = file_name.strip_suffix(".md").unwrap_or(file_name);
 
-                        let bg_color = if selected {
-                            if palette.dark {
-                                Color32::from_rgb(36, 46, 68)
-                            } else {
-                                palette.soft_blue
-                            }
-                        } else {
-                            Color32::TRANSPARENT
-                        };
-
                         let item_rect_approx = egui::Rect::from_min_size(
                             ui.cursor().min,
                             egui::vec2(inner_width - 4.0, 32.0),
                         );
                         let is_hovered = ui.rect_contains_pointer(item_rect_approx);
+                        let bg_color = if selected {
+                            palette.surface_active
+                        } else if is_hovered {
+                            palette.surface_hover
+                        } else {
+                            Color32::TRANSPARENT
+                        };
 
                         let mut delete_clicked = false;
                         let item_frame = egui::Frame::new()
@@ -1200,6 +1287,25 @@ impl NodusApp {
                             ui.set_width(inner_width - 8.0);
                             ui.set_min_height(28.0);
                             ui.horizontal(|ui| {
+                                let depth = relative.components().count().saturating_sub(1);
+                                ui.add_space(depth as f32 * 12.0);
+                                let file_rect = ui
+                                    .allocate_exact_size(
+                                        egui::vec2(19.0, 20.0),
+                                        egui::Sense::hover(),
+                                    )
+                                    .0;
+                                chrome::paint_icon(
+                                    ui,
+                                    Icon::File,
+                                    file_rect.center(),
+                                    13.0,
+                                    if selected {
+                                        palette.accent
+                                    } else {
+                                        palette.muted
+                                    },
+                                );
                                 ui.label(
                                     RichText::new(clean_title)
                                         .font(if selected {
@@ -1218,18 +1324,13 @@ impl NodusApp {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if is_hovered
-                                            && ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        RichText::new("×")
-                                                            .font(ui_regular(11.0))
-                                                            .color(palette.muted),
-                                                    )
-                                                    .frame(false)
-                                                    .fill(Color32::TRANSPARENT),
-                                                )
-                                                .on_hover_text("Excluir nota")
-                                                .clicked()
+                                            && chrome::compact_icon_button(
+                                                ui,
+                                                Icon::Trash,
+                                                "Excluir nota",
+                                                palette,
+                                            )
+                                            .clicked()
                                         {
                                             delete_clicked = true;
                                             note_to_delete = Some(path.clone());
@@ -1280,7 +1381,10 @@ impl NodusApp {
 
         // Persist any user-driven width change (only when fully expanded and
         // not in the middle of a toggle animation).
-        if sidebar_visible && (width - target_width).abs() < 1.0 {
+        if sidebar_visible
+            && self.settings.ui.sidebar_width <= responsive_sidebar_max + 1.0
+            && (width - target_width).abs() < 1.0
+        {
             let actual = response.response.rect.width();
             if (actual - self.settings.ui.sidebar_width).abs() > 1.0 {
                 self.settings.ui.sidebar_width = actual;
@@ -1293,7 +1397,7 @@ impl NodusApp {
         let ctx = root_ui.ctx().clone();
         let sync_visible = self.settings.ui.sync_panel_visible;
         let target_width = if sync_visible {
-            theme::layout::SYNC_WIDTH
+            theme::layout::SYNC_WIDTH.min((ctx.content_rect().width() * 0.34).max(270.0))
         } else {
             0.0
         };
@@ -1323,23 +1427,23 @@ impl NodusApp {
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
+                    let sync_icon = ui
+                        .allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover())
+                        .0;
+                    chrome::paint_icon(ui, Icon::Sync, sync_icon.center(), 17.0, palette.accent);
                     ui.label(
-                        RichText::new("Sync")
-                            .font(ui_semibold(20.0))
+                        RichText::new("Sincronização")
+                            .font(ui_semibold(17.0))
                             .color(palette.ink),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let chevron = egui::Button::new(
-                            RichText::new("›")
-                                .font(ui_semibold(16.0))
-                                .color(palette.muted),
+                        if chrome::compact_icon_button(
+                            ui,
+                            Icon::ChevronRight,
+                            "Ocultar painel de sync (Ctrl+Shift+P)",
+                            palette,
                         )
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT);
-                        if ui
-                            .add(chevron)
-                            .on_hover_text("Ocultar painel de sync (Ctrl+Shift+P)")
-                            .clicked()
+                        .clicked()
                         {
                             self.settings.ui.sync_panel_visible = false;
                             self.note_panel_toggle();
@@ -1360,48 +1464,87 @@ impl NodusApp {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(inner_width);
-                        ui.label(
-                            RichText::new(&self.sync_status)
-                                .font(ui_medium(12.5))
-                                .color(status_color),
-                        );
+                        ui.horizontal(|ui| {
+                            let dot = ui
+                                .allocate_exact_size(egui::vec2(16.0, 18.0), egui::Sense::hover())
+                                .0;
+                            chrome::connection_dot(ui, dot.center(), status_color);
+                            ui.label(
+                                RichText::new(&self.sync_status)
+                                    .font(ui_medium(12.5))
+                                    .color(status_color),
+                            );
+                        });
                     });
 
-                ui.add_space(22.0);
-                ui.label(
-                    RichText::new("Este dispositivo")
-                        .font(ui_medium(12.0))
-                        .color(palette.muted),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(&self.settings.device_name)
-                        .font(ui_semibold(15.0))
-                        .color(palette.ink),
-                );
-                ui.label(
-                    RichText::new(format!("ID {}", self.endpoint_short))
-                        .monospace()
-                        .size(10.5)
-                        .color(palette.muted),
-                );
+                ui.add_space(20.0);
+                chrome::section_label(ui, "Este dispositivo", palette);
+                ui.add_space(6.0);
+                egui::Frame::new()
+                    .fill(palette.surface)
+                    .stroke(Stroke::new(1.0, palette.border))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(10, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(inner_width);
+                        ui.horizontal(|ui| {
+                            let device = ui
+                                .allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover())
+                                .0;
+                            ui.painter().rect_filled(
+                                device,
+                                egui::CornerRadius::same(7),
+                                palette.surface_active,
+                            );
+                            chrome::paint_icon(
+                                ui,
+                                Icon::Device,
+                                device.center(),
+                                16.0,
+                                palette.accent,
+                            );
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(&self.settings.device_name)
+                                        .font(ui_semibold(13.5))
+                                        .color(palette.ink),
+                                );
+                                ui.label(
+                                    RichText::new(format!("ID {}", self.endpoint_short))
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(palette.muted),
+                                );
+                            });
+                        });
+                    });
 
                 if !peers.is_empty() {
                     ui.add_space(22.0);
-                    ui.label(
-                        RichText::new("Dispositivos pareados")
-                            .font(ui_medium(12.0))
-                            .color(palette.muted),
-                    );
+                    chrome::section_label(ui, "Dispositivos confiáveis", palette);
                     ui.add_space(6.0);
                     for peer in &peers {
                         egui::Frame::new()
-                            .fill(palette.bg)
+                            .fill(palette.surface)
+                            .stroke(Stroke::new(1.0, palette.border))
                             .corner_radius(7.0)
                             .inner_margin(egui::Margin::symmetric(10, 8))
                             .show(ui, |ui| {
                                 ui.set_width(inner_width);
                                 ui.horizontal(|ui| {
+                                    let device = ui
+                                        .allocate_exact_size(
+                                            egui::vec2(24.0, 24.0),
+                                            egui::Sense::hover(),
+                                        )
+                                        .0;
+                                    chrome::paint_icon(
+                                        ui,
+                                        Icon::Device,
+                                        device.center(),
+                                        14.0,
+                                        palette.muted,
+                                    );
                                     ui.label(
                                         RichText::new(&peer.name)
                                             .font(ui_medium(13.0))
@@ -1410,8 +1553,19 @@ impl NodusApp {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
+                                            let dot = ui
+                                                .allocate_exact_size(
+                                                    egui::vec2(12.0, 18.0),
+                                                    egui::Sense::hover(),
+                                                )
+                                                .0;
+                                            chrome::connection_dot(
+                                                ui,
+                                                dot.center(),
+                                                palette.success,
+                                            );
                                             ui.label(
-                                                RichText::new("Pareado")
+                                                RichText::new("Confiável")
                                                     .font(ui_regular(10.5))
                                                     .color(palette.success),
                                             );
@@ -1452,47 +1606,90 @@ impl NodusApp {
                     ui.add_space(14.0);
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.label(
-                            RichText::new("Compartilhe seu código")
+                            RichText::new("1. Compartilhe o convite")
                                 .font(ui_semibold(13.0))
                                 .color(palette.ink),
                         );
                         ui.label(
-                            RichText::new("Envie-o por um canal em que você confia.")
+                            RichText::new("Copie e envie por um canal em que você confia.")
                                 .font(ui_regular(11.5))
                                 .color(palette.muted),
                         );
                         ui.add_space(7.0);
-                        let mut shown_code = self.pair_code.clone();
-                        ui.add_sized(
-                            [inner_width, 54.0],
-                            egui::TextEdit::multiline(&mut shown_code)
-                                .font(FontId::monospace(9.5))
-                                .interactive(false)
-                                .background_color(palette.surface)
-                                .margin(egui::Margin::same(7)),
-                        );
-                        if ui
-                            .add_sized(
-                                [inner_width, 32.0],
-                                egui::Button::new(
-                                    RichText::new("Copiar código").font(ui_medium(12.0)),
-                                ),
-                            )
-                            .clicked()
-                            && !self.pair_code.is_empty()
-                        {
-                            ctx.copy_text(self.pair_code.clone());
-                        }
+                        egui::Frame::new()
+                            .fill(palette.surface)
+                            .stroke(Stroke::new(1.0, palette.border))
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(9, 8))
+                            .show(ui, |ui| {
+                                ui.set_width(inner_width);
+                                ui.horizontal(|ui| {
+                                    let link = ui
+                                        .allocate_exact_size(
+                                            egui::vec2(24.0, 24.0),
+                                            egui::Sense::hover(),
+                                        )
+                                        .0;
+                                    chrome::paint_icon(
+                                        ui,
+                                        Icon::Link,
+                                        link.center(),
+                                        14.0,
+                                        palette.accent,
+                                    );
+                                    let prefix: String = self.pair_code.chars().take(11).collect();
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            RichText::new("Convite deste vault")
+                                                .font(ui_medium(12.0))
+                                                .color(palette.ink),
+                                        );
+                                        ui.label(
+                                            RichText::new(if prefix.is_empty() {
+                                                "Preparando código…".to_owned()
+                                            } else {
+                                                format!(
+                                                    "{prefix}… · {} caracteres",
+                                                    self.pair_code.len()
+                                                )
+                                            })
+                                            .font(FontId::monospace(9.5))
+                                            .color(palette.muted),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if chrome::compact_icon_button(
+                                                ui,
+                                                Icon::Copy,
+                                                "Copiar convite",
+                                                palette,
+                                            )
+                                            .clicked()
+                                                && !self.pair_code.is_empty()
+                                            {
+                                                ctx.copy_text(self.pair_code.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                            });
 
-                        ui.add_space(14.0);
+                        ui.add_space(18.0);
                         ui.label(
-                            RichText::new("Cole o código da outra máquina")
+                            RichText::new("2. Adicione o outro dispositivo")
                                 .font(ui_semibold(13.0))
                                 .color(palette.ink),
                         );
+                        ui.label(
+                            RichText::new("Cole aqui o convite recebido na outra máquina.")
+                                .font(ui_regular(11.5))
+                                .color(palette.muted),
+                        );
                         ui.add_space(7.0);
                         ui.add_sized(
-                            [inner_width, 54.0],
+                            [inner_width, 72.0],
                             egui::TextEdit::multiline(&mut self.pair_input)
                                 .font(FontId::monospace(9.5))
                                 .hint_text("NODUS3...")
@@ -1539,6 +1736,158 @@ impl NodusApp {
             });
     }
 
+    fn render_document_tabbar(&mut self, ui: &mut egui::Ui, palette: theme::Palette) {
+        let title = self
+            .selected
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .and_then(|value| value.to_str())
+            .unwrap_or("Nota")
+            .to_owned();
+        egui::Frame::new()
+            .fill(palette.sidebar)
+            .inner_margin(egui::Margin {
+                left: 10,
+                right: 10,
+                top: 4,
+                bottom: 0,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    egui::Frame::new()
+                        .fill(palette.bg)
+                        .stroke(Stroke::new(1.0, palette.border))
+                        .corner_radius(egui::CornerRadius {
+                            nw: 7,
+                            ne: 7,
+                            sw: 0,
+                            se: 0,
+                        })
+                        .inner_margin(egui::Margin::symmetric(10, 6))
+                        .show(ui, |ui| {
+                            chrome::paint_icon(
+                                ui,
+                                Icon::File,
+                                egui::pos2(ui.cursor().left() + 7.0, ui.cursor().center().y),
+                                13.0,
+                                palette.muted,
+                            );
+                            ui.add_space(18.0);
+                            ui.label(
+                                RichText::new(title)
+                                    .font(ui_medium(12.0))
+                                    .color(palette.ink),
+                            );
+                            if self.dirty {
+                                ui.label(
+                                    RichText::new("●")
+                                        .font(ui_regular(7.0))
+                                        .color(palette.warning),
+                                );
+                            }
+                        });
+                    if chrome::compact_icon_button(ui, Icon::Plus, "Nova nota", palette).clicked() {
+                        self.new_note();
+                    }
+                });
+            });
+        chrome::separator(ui, palette);
+    }
+
+    fn render_block_toolbar(&mut self, ui: &mut egui::Ui, palette: theme::Palette) {
+        let Some(index) = self.active_block.filter(|index| *index < self.blocks.len()) else {
+            egui::Frame::new()
+                .fill(palette.surface)
+                .stroke(Stroke::new(1.0, palette.border))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let grip = ui
+                            .allocate_exact_size(egui::vec2(22.0, 26.0), egui::Sense::hover())
+                            .0;
+                        chrome::paint_icon(ui, Icon::Grip, grip.center(), 13.0, palette.muted);
+                        ui.label(
+                            RichText::new("Selecione um bloco para formatar")
+                                .font(ui_regular(11.0))
+                                .color(palette.muted),
+                        );
+                    });
+                });
+            return;
+        };
+        let current = self.blocks[index].kind.clone();
+        let mut change_to: Option<BlockKind> = None;
+        let mut remove = false;
+        let compact = ui.available_width() < 520.0;
+
+        egui::Frame::new()
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let grip = ui
+                        .allocate_exact_size(egui::vec2(22.0, 26.0), egui::Sense::hover())
+                        .0;
+                    chrome::paint_icon(ui, Icon::Grip, grip.center(), 14.0, palette.muted);
+                    let kinds = [
+                        ("Texto", "T", BlockKind::Paragraph),
+                        ("Título", "H1", BlockKind::Heading1),
+                        ("Seção", "H2", BlockKind::Heading2),
+                        ("Lista", "•", BlockKind::Bullet),
+                        ("Tarefa", "[]", BlockKind::Checklist(false)),
+                        ("Citação", ">", BlockKind::Quote),
+                        (
+                            "Código",
+                            "</>",
+                            BlockKind::Code {
+                                lang: String::new(),
+                            },
+                        ),
+                    ];
+                    for (label, compact_label, kind) in kinds {
+                        let active = same_block_family(&current, &kind);
+                        let button = egui::Button::new(
+                            RichText::new(if compact { compact_label } else { label })
+                                .font(ui_medium(11.0))
+                                .color(if active { palette.ink } else { palette.muted }),
+                        )
+                        .fill(if active {
+                            palette.surface_active
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .stroke(Stroke::NONE)
+                        .corner_radius(5.0);
+                        if ui.add(button).on_hover_text(label).clicked() && !active {
+                            change_to = Some(kind);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if chrome::compact_icon_button(ui, Icon::Trash, "Remover bloco", palette)
+                            .clicked()
+                        {
+                            remove = true;
+                        }
+                    });
+                });
+            });
+
+        if let Some(kind) = change_to {
+            self.blocks[index].kind = kind;
+            self.mark_dirty();
+        }
+        if remove && self.blocks.len() > 1 {
+            self.blocks.remove(index);
+            self.active_block = Some(index.min(self.blocks.len() - 1));
+            self.pending_focus = self.active_block;
+            self.mark_dirty();
+        }
+    }
+
     fn render_editor(&mut self, root_ui: &mut egui::Ui, palette: theme::Palette) {
         if self.selected.is_none() {
             let has_vault = self.settings.active_vault().is_some();
@@ -1564,6 +1913,19 @@ impl NodusApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.bg))
             .show(root_ui, |ui| {
+                self.render_document_tabbar(ui, palette);
+                if self.settings.ui.view_mode == ViewMode::Notion {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let toolbar_width = ui.available_width().min(720.0);
+                        let side_space = ((ui.available_width() - toolbar_width) / 2.0).max(12.0);
+                        ui.add_space(side_space);
+                        ui.vertical(|ui| {
+                            ui.set_width(toolbar_width);
+                            self.render_block_toolbar(ui, palette);
+                        });
+                    });
+                }
                 if let Some(error) = &self.save_error {
                     ui.label(
                         RichText::new(error)
@@ -1577,14 +1939,14 @@ impl NodusApp {
                     self.render_split_editor(ui, palette);
                 } else {
                     let available = ui.available_size();
-                    let page_width = available.x.min(760.0);
+                    let page_width = available.x.min(780.0);
                     let side_space = ((available.x - page_width) / 2.0).max(18.0);
 
                     ui.horizontal_top(|ui| {
                         ui.add_space(side_space);
                         ui.vertical(|ui| {
                             ui.set_width(page_width);
-                            ui.add_space(14.0);
+                            ui.add_space(30.0);
                             match self.settings.ui.view_mode {
                                 ViewMode::Notion => self.render_notion_blocks(ui, palette),
                                 ViewMode::Preview => self.render_preview_mode(ui, palette),
@@ -1623,8 +1985,8 @@ impl NodusApp {
                     if is_active {
                         let text_rows = editor_rows(&block.text);
                         let (font, min_height) = match &block.kind {
-                            BlockKind::Heading1 => (serif_semibold(28.0), 38.0),
-                            BlockKind::Heading2 => (serif_semibold(22.0), 32.0),
+                            BlockKind::Heading1 => (serif_semibold(34.0), 46.0),
+                            BlockKind::Heading2 => (serif_semibold(24.0), 34.0),
                             BlockKind::Heading3 => (serif_semibold(18.0), 28.0),
                             BlockKind::Code { .. } => (FontId::monospace(13.0), 30.0),
                             _ => (serif_regular(16.5), 26.0),
@@ -1836,6 +2198,34 @@ impl NodusApp {
                             }
                         };
 
+                        let handle_rect = egui::Rect::from_center_size(
+                            egui::pos2(response.rect.left() - 15.0, response.rect.center().y),
+                            egui::vec2(22.0, 28.0),
+                        );
+                        let handle = ui.interact(
+                            handle_rect,
+                            ui.id().with(("block-handle", idx)),
+                            egui::Sense::click(),
+                        );
+                        if handle.hovered() {
+                            ui.painter().rect_filled(
+                                handle_rect,
+                                egui::CornerRadius::same(6),
+                                palette.surface_hover,
+                            );
+                        }
+                        chrome::paint_icon(
+                            ui,
+                            Icon::Grip,
+                            handle_rect.center(),
+                            14.0,
+                            if handle.hovered() {
+                                palette.ink
+                            } else {
+                                palette.muted.gamma_multiply(0.65)
+                            },
+                        );
+
                         if response.changed() {
                             text_changed = true;
 
@@ -1971,7 +2361,7 @@ impl NodusApp {
                                 let resp = ui.add(
                                     egui::Label::new(
                                         RichText::new(&block.text)
-                                            .font(serif_semibold(28.0))
+                                            .font(serif_semibold(34.0))
                                             .color(palette.ink),
                                     )
                                     .sense(egui::Sense::click()),
@@ -1997,7 +2387,7 @@ impl NodusApp {
                                 let resp = ui.add(
                                     egui::Label::new(
                                         RichText::new(&block.text)
-                                            .font(serif_semibold(22.0))
+                                            .font(serif_semibold(24.0))
                                             .color(palette.ink),
                                     )
                                     .sense(egui::Sense::click()),
@@ -2845,6 +3235,7 @@ impl eframe::App for NodusApp {
             theme::apply(&ctx, &palette);
             self.applied_theme_is_dark = Some(palette.dark);
         }
+        self.render_titlebar(root_ui, palette);
         self.render_topbar(root_ui, palette);
         self.render_sidebar(root_ui, palette);
         self.render_sync_panel(root_ui, palette);
@@ -2852,6 +3243,7 @@ impl eframe::App for NodusApp {
         self.maybe_autosave();
         self.render_pair_request_dialog(&ctx, palette);
         self.render_close_dialog(&ctx, palette);
+        chrome::window_resize(root_ui);
 
         // Smart repaint: drive the event loop from actual activity instead of
         // an unconditional 4 fps tick. Idle keeps a slow 1s heartbeat so the
@@ -2889,6 +3281,22 @@ fn selected_title(blocks: &[Block]) -> Option<String> {
 
 fn editor_rows(text: &str) -> usize {
     text.lines().count().clamp(1, 12)
+}
+
+fn same_block_family(left: &BlockKind, right: &BlockKind) -> bool {
+    matches!(
+        (left, right),
+        (BlockKind::Heading1, BlockKind::Heading1)
+            | (BlockKind::Heading2, BlockKind::Heading2)
+            | (BlockKind::Heading3, BlockKind::Heading3)
+            | (BlockKind::Checklist(_), BlockKind::Checklist(_))
+            | (BlockKind::Bullet, BlockKind::Bullet)
+            | (BlockKind::Numbered(_), BlockKind::Numbered(_))
+            | (BlockKind::Quote, BlockKind::Quote)
+            | (BlockKind::Code { .. }, BlockKind::Code { .. })
+            | (BlockKind::Divider, BlockKind::Divider)
+            | (BlockKind::Paragraph, BlockKind::Paragraph)
+    )
 }
 
 fn migrate_generated_note_names(mut notes: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -3526,6 +3934,26 @@ mod tests {
         assert_eq!(editor_rows("texto entre dois blocos"), 1);
         assert_eq!(editor_rows("linha 1\nlinha 2"), 2);
         assert_eq!(editor_rows(""), 1);
+    }
+
+    #[test]
+    fn contextual_toolbar_matches_block_families() {
+        assert!(same_block_family(
+            &BlockKind::Checklist(true),
+            &BlockKind::Checklist(false)
+        ));
+        assert!(same_block_family(
+            &BlockKind::Code {
+                lang: "rust".to_owned()
+            },
+            &BlockKind::Code {
+                lang: String::new()
+            }
+        ));
+        assert!(!same_block_family(
+            &BlockKind::Heading1,
+            &BlockKind::Heading2
+        ));
     }
 
     #[test]
