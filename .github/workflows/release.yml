@@ -1,0 +1,270 @@
+name: Release multiplataforma
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existente para recompilar, por exemplo v0.6.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: Conferir versão
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Baixar o código da tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Conferir tag e Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ -z "$version" ]]; then
+            echo "Não foi possível ler a versão do Cargo.toml." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "A tag $RELEASE_TAG não corresponde à versão $version do Cargo.toml." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: ${{ matrix.label }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            slug: windows-x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - label: Windows x86 (32 bits)
+            slug: windows-x86
+            runner: windows-2022
+            target: i686-pc-windows-msvc
+          - label: Windows ARM64
+            slug: windows-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - name: Baixar o código da tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Instalar o alvo Rust
+        shell: pwsh
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Compilar
+        shell: pwsh
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Empacotar
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          $packageName = "Nodus-$env:VERSION-$env:SLUG"
+          $packageDir = Join-Path "dist" $packageName
+          $archive = Join-Path "dist" "$packageName.zip"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/$env:TARGET/release/nodus.exe" (Join-Path $packageDir "Nodus.exe")
+          Copy-Item "packaging/LEIA-ME.md" $packageDir
+          Copy-Item "assets/fonts/Inter-LICENSE.txt" $packageDir
+          Copy-Item "assets/fonts/SourceSerif4-LICENSE.md" $packageDir
+          Compress-Archive -Path $packageDir -DestinationPath $archive -Force
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $packageName.zip" | Set-Content "$archive.sha256" -Encoding ascii -NoNewline
+
+      - name: Guardar pacote
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodus-${{ matrix.slug }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  linux:
+    name: ${{ matrix.label }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            slug: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - label: Linux ARM64
+            slug: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Baixar o código da tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Instalar bibliotecas nativas
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Instalar o alvo Rust
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Compilar
+        shell: bash
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Empacotar
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          set -euo pipefail
+          package_name="Nodus-$VERSION-$SLUG"
+          package_dir="dist/$package_name"
+          mkdir -p "$package_dir"
+          install -m 755 "target/$TARGET/release/nodus" "$package_dir/Nodus"
+          cp packaging/LEIA-ME.md "$package_dir/"
+          cp assets/fonts/Inter-LICENSE.txt "$package_dir/"
+          cp assets/fonts/SourceSerif4-LICENSE.md "$package_dir/"
+          tar -czf "dist/$package_name.tar.gz" -C dist "$package_name"
+          (cd dist && sha256sum "$package_name.tar.gz" > "$package_name.tar.gz.sha256")
+
+      - name: Guardar pacote
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodus-${{ matrix.slug }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  linux-x86:
+    name: Linux x86 (32 bits)
+    needs: verify
+    runs-on: ubuntu-22.04
+    env:
+      TARGET: i686-unknown-linux-gnu
+      SLUG: linux-x86
+    steps:
+      - name: Baixar o código da tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Instalar cross
+        shell: bash
+        run: |
+          cargo install cross \
+            --git https://github.com/cross-rs/cross \
+            --rev 8c1a8aa4b661711f4b7b6ac07c2e8929ce2f7d27 \
+            --locked
+
+      - name: Compilar em ambiente Linux 32 bits
+        shell: bash
+        run: cross build --release --locked --target "$TARGET"
+
+      - name: Empacotar
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          package_name="Nodus-$VERSION-$SLUG"
+          package_dir="dist/$package_name"
+          mkdir -p "$package_dir"
+          install -m 755 "target/$TARGET/release/nodus" "$package_dir/Nodus"
+          cp packaging/LEIA-ME.md "$package_dir/"
+          cp assets/fonts/Inter-LICENSE.txt "$package_dir/"
+          cp assets/fonts/SourceSerif4-LICENSE.md "$package_dir/"
+          tar -czf "dist/$package_name.tar.gz" -C dist "$package_name"
+          (cd dist && sha256sum "$package_name.tar.gz" > "$package_name.tar.gz.sha256")
+
+      - name: Guardar pacote
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodus-linux-x86
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publicar no GitHub Releases
+    needs: [verify, windows, linux, linux-x86]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Baixar todos os pacotes
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Listar conteúdo
+        shell: bash
+        run: find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Criar ou atualizar a Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "Nodus $VERSION"
+          fi

@@ -5,8 +5,7 @@
 #
 # Pre-requisitos:
 #     cargo build --release   # para gerar target/release/nodus.exe
-#     LEIA-ME.md presente em dist/Nodus-<versao>-portable/  (crie a partir
-#     do da ultima release se for uma nova versao)
+#     packaging/LEIA-ME.md presente no repositorio
 #
 # Saida:
 #     dist/Nodus-<versao>-portable/        pasta portatil com todos os arquivos
@@ -37,45 +36,28 @@ if (-not (Test-Path $exePath)) {
 
 $portableDir = Join-Path "dist" "Nodus-$version-portable"
 $zipPath = Join-Path "dist" "Nodus-$version-windows-x64.zip"
-$readmePath = Join-Path $portableDir "LEIA-ME.md"
-
-# --- 4. LEIA-ME: obrigatorio. Se faltar, semeia do anterior -----------------
-
-if (-not (Test-Path $readmePath)) {
-    $latest = Get-ChildItem "dist" -Filter "LEIA-ME.md" -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { ($_.DirectoryName | Split-Path -Leaf) -ne (Split-Path $portableDir -Leaf) } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-    if ($latest) {
-        Write-Host "Semendo LEIA-ME.md a partir de $($latest.FullName) - edite antes de publicar." -ForegroundColor Yellow
-        New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
-        Copy-Item $latest.FullName $readmePath
-    } else {
-        throw "Nenhum LEIA-ME.md existente em dist/. Crie '$readmePath' manualmente primeiro."
-    }
-}
-
-# --- 5. Limpa a pasta (mas preserva o LEIA-ME.md) -----------------------------
+# --- 4. Limpa e recria a pasta ------------------------------------------------
 
 if (Test-Path $portableDir) {
-    Get-ChildItem $portableDir -Force |
-        Where-Object { $_.Name -ne "LEIA-ME.md" } |
-        Remove-Item -Recurse -Force
+    Remove-Item $portableDir -Recurse -Force
 }
-# --- 6. Copia os arquivos ----------------------------------------------------
+New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+
+# --- 5. Copia os arquivos ----------------------------------------------------
 
 Copy-Item $exePath (Join-Path $portableDir "Nodus.exe")
+Copy-Item "packaging/LEIA-ME.md" $portableDir
 Copy-Item "assets/fonts/Inter-LICENSE.txt" $portableDir
 Copy-Item "assets/fonts/SourceSerif4-LICENSE.md" $portableDir
 
-# --- 7. Zip -------------------------------------------------------------------
+# --- 6. Zip -------------------------------------------------------------------
 
 if (Test-Path $zipPath) {
     Remove-Item $zipPath -Force
 }
 Compress-Archive -Path $portableDir -DestinationPath $zipPath
 
-# --- 8. Resumo ---------------------------------------------------------------
+# --- 7. Resumo ---------------------------------------------------------------
 
 Write-Host ""
 Write-Host "Release empacotada:" -ForegroundColor Green

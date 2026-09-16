@@ -28,6 +28,12 @@ O editor preserva Markdown puro. A visualização entende CommonMark e recursos 
 
 Limites desta sprint: exclusões e renomes ainda não são propagados, vaults inativos não sincronizam em segundo plano e conflitos simultâneos ainda são resolvidos por data de modificação com uma cópia de segurança quando necessário.
 
+## Downloads
+
+As GitHub Releases geram automaticamente pacotes nativos para Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86 e Linux ARM64. Cada download acompanha um checksum SHA-256 e não contém vaults, configurações, identidades ou chaves do desenvolvedor.
+
+O processo de publicação está documentado em [RELEASING.md](RELEASING.md).
+
 ## Rodar no desenvolvimento
 
 ```powershell
