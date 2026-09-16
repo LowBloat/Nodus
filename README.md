@@ -2,7 +2,7 @@
 
 Editor desktop nativo em Rust para vaults de notas Markdown com sincronização P2P criptografada.
 
-## Sprint 0.5
+## Sprint 0.5.1
 
 - arquivos `.md` continuam comuns e 100% acessíveis por qualquer editor;
 - múltiplos vaults, cada um apontando para uma pasta escolhida pelo usuário;
@@ -10,6 +10,8 @@ Editor desktop nativo em Rust para vaults de notas Markdown com sincronização 
 - lista de vaults, vault ativo, identidade P2P e dispositivos pareados persistem no AppData;
 - identidade, código de sync e lista de peers são isolados por vault;
 - salvamento automático cerca de 700 ms depois da última edição, seguido de uma tentativa de sync;
+- alterar o primeiro título `#` renomeia o arquivo `.md` e atualiza a lateral no autosave;
+- blocos de texto ocupam somente as linhas necessárias enquanto são editados;
 - `Ctrl+S` continua disponível para forçar salvamento e sync imediatamente;
 - pareamento por convite: cole somente o código do PC1 no PC2 e aprove a solicitação no PC1;
 - conexão QUIC autenticada e criptografada com iroh;

@@ -38,6 +38,8 @@ Everything is left aligned. The document body is centered inside the writing sur
 ## Interaction rules
 
 - Editing starts a 700 ms debounce; expiry saves the active Markdown file and requests one sync pass.
+- Changing the first H1 renames the Markdown file on that same debounce; the sidebar and breadcrumb follow the resulting filename.
+- An active paragraph reserves one row per actual content line, avoiding vertical jumps between neighboring blocks.
 - `Ctrl+S` persists and syncs immediately. The top bar reports `Salvando…` and `Salvo` instead of presenting save as a primary action.
 - Switching notes flushes the current note before navigation.
 - Closing with drafts open presents Save all, Discard, and Cancel actions.

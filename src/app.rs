@@ -69,6 +69,7 @@ pub struct NodusApp {
     markdown_cache: CommonMarkCache,
     fatal_error: Option<String>,
     full_editor_text: String,
+    saved_title: Option<String>,
     applied_theme_is_dark: Option<bool>,
 }
 
@@ -127,6 +128,7 @@ impl NodusApp {
             .active_vault()
             .map(|v| vault::list_notes(&v.path))
             .unwrap_or_default();
+        let notes = migrate_generated_note_names(notes);
         let selected = notes.first().cloned();
         let (blocks, loaded_modified_ms, full_editor_text) = selected
             .as_ref()
@@ -140,6 +142,7 @@ impl NodusApp {
             })
             .unwrap_or_default();
         let pairing_expanded = settings.active_vault().is_some_and(|v| v.peers.is_empty());
+        let saved_title = selected_title(&blocks);
         Self {
             paths,
             settings,
@@ -176,6 +179,7 @@ impl NodusApp {
             markdown_cache: CommonMarkCache::default(),
             fatal_error: None,
             full_editor_text,
+            saved_title,
             applied_theme_is_dark: None,
         }
     }
@@ -228,6 +232,7 @@ impl NodusApp {
             markdown_cache: CommonMarkCache::default(),
             fatal_error: Some(message),
             full_editor_text: String::new(),
+            saved_title: None,
             applied_theme_is_dark: Some(palette.dark),
         }
     }
@@ -253,6 +258,11 @@ impl NodusApp {
             }
         }
         if let Some(draft) = self.drafts.remove(&path) {
+            self.saved_title = fs::read_to_string(&path)
+                .ok()
+                .map(|content| blocks_from_content(&content))
+                .as_deref()
+                .and_then(selected_title);
             self.blocks = draft;
             self.full_editor_text = content_from_blocks(&self.blocks);
             self.mark_dirty();
@@ -261,6 +271,7 @@ impl NodusApp {
             self.blocks = blocks_from_content(&content);
             self.full_editor_text = content;
             self.dirty = false;
+            self.saved_title = selected_title(&self.blocks);
         }
         self.active_block = None;
         self.pending_focus = None;
@@ -277,6 +288,7 @@ impl NodusApp {
         self.selected = Some(path.clone());
         self.blocks = vec![Block::h1("Nova nota"), Block::paragraph("")];
         self.full_editor_text = content_from_blocks(&self.blocks);
+        self.saved_title = Some("Nova nota".to_owned());
         self.active_block = Some(1);
         self.pending_focus = Some(1);
         self.slash_open = false;
@@ -299,10 +311,12 @@ impl NodusApp {
                 let content = fs::read_to_string(sel).unwrap_or_default();
                 self.blocks = blocks_from_content(&content);
                 self.full_editor_text = content;
+                self.saved_title = selected_title(&self.blocks);
                 self.loaded_modified_ms = vault::modified_ms(sel);
             } else {
                 self.blocks = Vec::new();
                 self.full_editor_text = String::new();
+                self.saved_title = None;
                 self.loaded_modified_ms = 0;
             }
             self.dirty = false;
@@ -344,12 +358,31 @@ impl NodusApp {
             self.full_editor_text = c.clone();
             c
         };
-        match fs::write(&path, content.as_bytes()) {
+        let current_title = selected_title(&self.blocks);
+        let target = if current_title != self.saved_title {
+            current_title
+                .as_deref()
+                .map(|title| titled_note_path(&path, title, &self.notes))
+                .unwrap_or_else(|| path.clone())
+        } else {
+            path.clone()
+        };
+        match write_note_and_replace_path(&path, &target, content.as_bytes()) {
             Ok(()) => {
-                self.loaded_modified_ms = vault::modified_ms(&path);
+                if target != path {
+                    if let Some(note) = self.notes.iter_mut().find(|note| **note == path) {
+                        *note = target.clone();
+                    }
+                    if let Some(draft) = self.drafts.remove(&path) {
+                        self.drafts.insert(target.clone(), draft);
+                    }
+                    self.selected = Some(target.clone());
+                }
+                self.saved_title = current_title;
+                self.loaded_modified_ms = vault::modified_ms(&target);
                 self.dirty = false;
                 self.last_edit_at = None;
-                self.drafts.remove(&path);
+                self.drafts.remove(&target);
                 self.save_feedback_until = Some(Instant::now() + Duration::from_secs(2));
                 true
             }
@@ -424,7 +457,7 @@ impl NodusApp {
             self.notes.clear();
             return;
         };
-        let mut notes = vault::list_notes(&vault_path);
+        let mut notes = migrate_generated_note_names(vault::list_notes(&vault_path));
         for path in self.drafts.keys() {
             if !notes.contains(path) {
                 notes.push(path.clone());
@@ -446,6 +479,7 @@ impl NodusApp {
             if modified != 0 && modified != self.loaded_modified_ms {
                 let content = fs::read_to_string(selected).unwrap_or_default();
                 self.blocks = blocks_from_content(&content);
+                self.saved_title = selected_title(&self.blocks);
                 self.active_block = None;
                 self.pending_focus = None;
                 self.slash_open = false;
@@ -653,10 +687,11 @@ impl NodusApp {
     }
 
     fn load_active_vault(&mut self) {
-        self.notes = self
-            .active_vault_path()
-            .map(vault::list_notes)
-            .unwrap_or_default();
+        self.notes = migrate_generated_note_names(
+            self.active_vault_path()
+                .map(vault::list_notes)
+                .unwrap_or_default(),
+        );
         self.selected = self.notes.first().cloned();
         let content = self
             .selected
@@ -665,6 +700,7 @@ impl NodusApp {
             .unwrap_or_default();
         self.blocks = blocks_from_content(&content);
         self.full_editor_text = content;
+        self.saved_title = selected_title(&self.blocks);
         self.loaded_modified_ms = self.selected.as_ref().map_or(0, |p| vault::modified_ms(p));
         self.dirty = false;
         self.last_edit_at = None;
@@ -1585,6 +1621,7 @@ impl NodusApp {
                     let block = &mut self.blocks[idx];
 
                     if is_active {
+                        let text_rows = editor_rows(&block.text);
                         let (font, min_height) = match &block.kind {
                             BlockKind::Heading1 => (serif_semibold(28.0), 38.0),
                             BlockKind::Heading2 => (serif_semibold(22.0), 32.0),
@@ -1726,6 +1763,7 @@ impl NodusApp {
                                         let resp = ui.add_sized(
                                             egui::vec2(ui.available_width(), min_height),
                                             egui::TextEdit::multiline(&mut block.text)
+                                                .desired_rows(text_rows)
                                                 .font(font)
                                                 .text_color(palette.ink)
                                                 .frame(frame_text)
@@ -1786,6 +1824,7 @@ impl NodusApp {
                                 let resp = ui.add_sized(
                                     egui::vec2(ui.available_width(), min_height),
                                     egui::TextEdit::multiline(&mut block.text)
+                                        .desired_rows(text_rows)
                                         .font(font)
                                         .text_color(palette.ink)
                                         .frame(frame_text)
@@ -2840,6 +2879,125 @@ fn file_uri_prefix(path: &Path) -> String {
     format!("file:///{normalized}/")
 }
 
+fn selected_title(blocks: &[Block]) -> Option<String> {
+    blocks.first().and_then(|block| {
+        matches!(block.kind, BlockKind::Heading1)
+            .then(|| block.text.trim().to_owned())
+            .filter(|title| !title.is_empty())
+    })
+}
+
+fn editor_rows(text: &str) -> usize {
+    text.lines().count().clamp(1, 12)
+}
+
+fn migrate_generated_note_names(mut notes: Vec<PathBuf>) -> Vec<PathBuf> {
+    for index in 0..notes.len() {
+        let current = notes[index].clone();
+        let Some(stem) = current.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let generated_name = stem == "Nova nota"
+            || stem.strip_prefix("Nova nota ").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+            });
+        if !generated_name {
+            continue;
+        }
+
+        let Some(title) = fs::read_to_string(&current)
+            .ok()
+            .and_then(|content| selected_title(&blocks_from_content(&content)))
+        else {
+            continue;
+        };
+        if title == stem {
+            continue;
+        }
+
+        let target = titled_note_path(&current, &title, &notes);
+        if target != current && fs::rename(&current, &target).is_ok() {
+            notes[index] = target;
+        }
+    }
+    notes.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+    notes
+}
+
+fn titled_note_path(current: &Path, title: &str, notes: &[PathBuf]) -> PathBuf {
+    let parent = current.parent().unwrap_or_else(|| Path::new("."));
+    let stem = sanitize_note_stem(title).unwrap_or_else(|| "Sem título".to_owned());
+    for index in 1..10_000 {
+        let filename = if index == 1 {
+            format!("{stem}.md")
+        } else {
+            format!("{stem} {index}.md")
+        };
+        let candidate = parent.join(filename);
+        if candidate == current
+            || (!candidate.exists()
+                && !notes
+                    .iter()
+                    .any(|note| note != current && note == &candidate))
+        {
+            return candidate;
+        }
+    }
+    parent.join(format!("{stem}-{}.md", vault::modified_ms(current)))
+}
+
+fn sanitize_note_stem(title: &str) -> Option<String> {
+    let mut clean = String::with_capacity(title.len().min(120));
+    let mut previous_was_space = false;
+    for ch in title.chars() {
+        if clean.chars().count() >= 120 {
+            break;
+        }
+        let replacement = if ch.is_control()
+            || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        {
+            ' '
+        } else {
+            ch
+        };
+        if replacement.is_whitespace() {
+            if !previous_was_space && !clean.is_empty() {
+                clean.push(' ');
+            }
+            previous_was_space = true;
+        } else {
+            clean.push(replacement);
+            previous_was_space = false;
+        }
+    }
+    let mut clean = clean.trim().trim_end_matches(['.', ' ']).to_owned();
+    let upper = clean.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        clean.push_str(" nota");
+    }
+    (!clean.is_empty()).then_some(clean)
+}
+
+fn write_note_and_replace_path(
+    current: &Path,
+    target: &Path,
+    content: &[u8],
+) -> std::io::Result<()> {
+    fs::write(target, content)?;
+    if target != current
+        && current.exists()
+        && let Err(error) = fs::remove_file(current)
+    {
+        let _ = fs::remove_file(target);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn display_path(path: &Path) -> String {
     let shown = path.display().to_string();
     shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_owned()
@@ -3242,14 +3400,19 @@ mod tests {
         let mut app = test_app(directory.path());
         app.selected = Some(first.clone());
         app.blocks = vec![Block::h1("Primeira editada")];
+        app.saved_title = Some("Primeira".to_owned());
         app.dirty = true;
 
         app.select_note(second.clone());
         assert_eq!(app.blocks, vec![Block::h1("Segunda")]);
         assert!(!app.drafts.contains_key(&first));
-        assert_eq!(fs::read_to_string(&first).unwrap(), "# Primeira editada\n");
+        let renamed = directory.path().join("Primeira editada.md");
+        assert_eq!(
+            fs::read_to_string(&renamed).unwrap(),
+            "# Primeira editada\n"
+        );
 
-        app.select_note(first);
+        app.select_note(renamed);
         assert_eq!(app.blocks, vec![Block::h1("Primeira editada")]);
         assert!(!app.dirty);
     }
@@ -3291,6 +3454,78 @@ mod tests {
 
         assert_eq!(fs::read_to_string(note).unwrap(), "depois\n");
         assert!(!app.dirty);
+    }
+
+    #[test]
+    fn changing_the_title_renames_the_markdown_file_on_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("Nova nota.md");
+        fs::write(&original, "# Nova nota\n").unwrap();
+        let mut app = test_app(directory.path());
+        app.notes = vec![original.clone()];
+        app.selected = Some(original.clone());
+        app.blocks = vec![Block::h1("Teste"), Block::paragraph("conteúdo")];
+        app.saved_title = Some("Nova nota".to_owned());
+        app.dirty = true;
+
+        assert!(app.save_current_local());
+
+        let renamed = directory.path().join("Teste.md");
+        assert_eq!(app.selected.as_deref(), Some(renamed.as_path()));
+        assert!(!original.exists());
+        assert_eq!(
+            fs::read_to_string(renamed).unwrap(),
+            "# Teste\n\nconteúdo\n"
+        );
+    }
+
+    #[test]
+    fn existing_generated_note_is_migrated_from_its_heading() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("Nova nota.md");
+        fs::write(&original, "# Teste\n\nConteúdo\n").unwrap();
+
+        let notes = migrate_generated_note_names(vec![original.clone()]);
+
+        let renamed = directory.path().join("Teste.md");
+        assert_eq!(notes, vec![renamed.clone()]);
+        assert!(!original.exists());
+        assert_eq!(
+            fs::read_to_string(renamed).unwrap(),
+            "# Teste\n\nConteúdo\n"
+        );
+    }
+
+    #[test]
+    fn title_rename_sanitizes_windows_names_and_avoids_collisions() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("Nova nota.md");
+        let occupied = directory.path().join("Teste inválido.md");
+        fs::write(&original, "# Nova nota\n").unwrap();
+        fs::write(&occupied, "ocupado\n").unwrap();
+        let mut app = test_app(directory.path());
+        app.notes = vec![original.clone(), occupied];
+        app.selected = Some(original);
+        app.blocks = vec![Block::h1("Teste: inválido?")];
+        app.saved_title = Some("Nova nota".to_owned());
+        app.dirty = true;
+
+        assert!(app.save_current_local());
+
+        assert_eq!(
+            app.selected
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|p| p.to_str()),
+            Some("Teste inválido 2.md")
+        );
+    }
+
+    #[test]
+    fn single_line_blocks_use_one_editor_row() {
+        assert_eq!(editor_rows("texto entre dois blocos"), 1);
+        assert_eq!(editor_rows("linha 1\nlinha 2"), 2);
+        assert_eq!(editor_rows(""), 1);
     }
 
     #[test]
