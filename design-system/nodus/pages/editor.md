@@ -25,11 +25,11 @@ Interface typography and the raw Markdown editor use Inter at 13–17px. The ren
 ## Layout
 
 ```text
-┌ Library, 248 ┐┌──────────── writing surface ────────────┐┌ Sync, 292 ┐
-│ Nodus        ││ note title        Saved   Edit Preview ││ status     │
-│ search       ││                                          ││ device     │
-│ notes        ││        readable editorial column         ││ peers      │
-│              ││                                          ││ + connect  │
+┌ Vaults/notes ┐┌──────────── writing surface ────────────┐┌ Sync, 292 ┐
+│ Nodus        ││ vault ▾ / note   Write Split Read Saved ││ status     │
+│ vault path   ││                                          ││ device     │
+│ new note     ││        readable editorial column         ││ peers      │
+│ notes        ││                                          ││ + connect  │
 └──────────────┘└──────────────────────────────────────────┘└────────────┘
 ```
 
@@ -37,13 +37,14 @@ Everything is left aligned. The document body is centered inside the writing sur
 
 ## Interaction rules
 
-- Editing only changes an in-memory draft and visibly marks the note as unsaved.
-- `Ctrl+S` and the Save button persist the active draft, acknowledge success, and request one sync pass.
-- No timer initiates outbound sync.
-- Switching notes preserves each unsaved draft in memory.
+- Editing starts a 700 ms debounce; expiry saves the active Markdown file and requests one sync pass.
+- `Ctrl+S` persists and syncs immediately. The top bar reports `Salvando…` and `Salvo` instead of presenting save as a primary action.
+- Switching notes flushes the current note before navigation.
 - Closing with drafts open presents Save all, Discard, and Cancel actions.
 - Remote saves can still arrive because the listener remains available.
 - Pairing uses one invitation code: the receiving device asks for access and the device that issued the code must approve a modal showing the requester name and identity prefix.
+- The vault selector is the workspace anchor. Adding a vault uses the native folder picker; nested vaults are rejected with an inline recovery message.
+- Pairing identity, invitation code, and trusted devices belong to the active vault. Inactive vaults do not sync in the background.
 
 ## Self-critique
 

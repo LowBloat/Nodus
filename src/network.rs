@@ -70,6 +70,8 @@ impl NetworkService {
         device_name: String,
         secret_key: SecretKey,
         pairing_token: String,
+        vault_id: String,
+        vault_name: String,
         initial_peers: Vec<PeerConfig>,
     ) -> Self {
         let peers = Arc::new(RwLock::new(initial_peers));
@@ -91,6 +93,8 @@ impl NetworkService {
                             device_name,
                             secret_key,
                             pairing_token,
+                            vault_id,
+                            vault_name,
                             worker_peers,
                             command_rx,
                             event_tx.clone(),
@@ -163,6 +167,8 @@ async fn run_network(
     device_name: String,
     secret_key: SecretKey,
     pairing_token: String,
+    vault_id: String,
+    vault_name: String,
     peers: Arc<RwLock<Vec<PeerConfig>>>,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<NetworkCommand>,
     events: mpsc::Sender<NetworkEvent>,
@@ -173,17 +179,28 @@ async fn run_network(
         .bind()
         .await?;
 
-    publish_pair_code(&endpoint, &device_name, &pairing_token, &events);
+    publish_pair_code(
+        &endpoint,
+        &device_name,
+        &pairing_token,
+        &vault_id,
+        &vault_name,
+        &events,
+    );
     let online_endpoint = endpoint.clone();
     let online_events = events.clone();
     let online_name = device_name.clone();
     let online_pairing_token = pairing_token.clone();
+    let online_vault_id = vault_id.clone();
+    let online_vault_name = vault_name.clone();
     tokio::spawn(async move {
         let _ = tokio::time::timeout(Duration::from_secs(12), online_endpoint.online()).await;
         publish_pair_code(
             &online_endpoint,
             &online_name,
             &online_pairing_token,
+            &online_vault_id,
+            &online_vault_name,
             &online_events,
         );
     });
@@ -363,10 +380,18 @@ fn publish_pair_code(
     endpoint: &Endpoint,
     device_name: &str,
     pairing_token: &str,
+    vault_id: &str,
+    vault_name: &str,
     events: &mpsc::Sender<NetworkEvent>,
 ) {
     let _ = events.send(NetworkEvent::Ready {
-        pair_code: encode_pair_code(device_name, endpoint.addr(), pairing_token),
+        pair_code: encode_pair_code(
+            device_name,
+            endpoint.addr(),
+            pairing_token,
+            vault_id,
+            vault_name,
+        ),
         endpoint_id: endpoint.id().to_string(),
     });
 }
@@ -683,6 +708,8 @@ mod tests {
                 ticket: EndpointTicket::new(host.addr()).to_string(),
             },
             token: "token-de-convite-com-tamanho-suficiente".to_owned(),
+            vault_id: "vault-test".to_owned(),
+            vault_name: "Teste".to_owned(),
         };
 
         let host_clone = host.clone();

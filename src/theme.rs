@@ -249,7 +249,9 @@ fn configure_style(style: &mut egui::Style, palette: &Palette) {
     style.visuals.override_text_color = Some(palette.ink);
     style.text_styles.insert(TextStyle::Body, ui_regular(14.0));
     style.text_styles.insert(TextStyle::Button, ui_medium(13.5));
-    style.text_styles.insert(TextStyle::Heading, ui_semibold(22.0));
+    style
+        .text_styles
+        .insert(TextStyle::Heading, ui_semibold(22.0));
     style.text_styles.insert(TextStyle::Small, ui_regular(11.5));
 }
 
@@ -348,17 +350,6 @@ pub mod layout {
     pub const SYNC_WIDTH: f32 = 292.0;
     /// Animation duration for sync panel collapse/expand.
     pub const SYNC_ANIMATION_TIME: f32 = 0.18;
-
-    /// Max width of the centered "paper" inside the editor.
-    pub const PAPER_MAX_WIDTH: f32 = 860.0;
-    /// Vertical padding around the editor paper card.
-    pub const PAPER_VERTICAL_MARGIN: f32 = 22.0;
-    /// Horizontal padding around the editor paper card.
-    pub const PAPER_HORIZONTAL_MARGIN: f32 = 28.0;
-    /// Inner padding inside the paper card (symmetric x).
-    pub const PAPER_INNER_PADDING: f32 = 44.0;
-    /// Fixed width of the Save button in the editor header.
-    pub const SAVE_BUTTON_WIDTH: f32 = 126.0;
 }
 
 #[cfg(test)]

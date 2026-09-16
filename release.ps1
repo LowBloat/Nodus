@@ -62,15 +62,11 @@ if (Test-Path $portableDir) {
         Where-Object { $_.Name -ne "LEIA-ME.md" } |
         Remove-Item -Recurse -Force
 }
-$notesInsidePortable = Join-Path $portableDir "notes"
-New-Item -ItemType Directory -Force -Path $notesInsidePortable | Out-Null
-
 # --- 6. Copia os arquivos ----------------------------------------------------
 
 Copy-Item $exePath (Join-Path $portableDir "Nodus.exe")
 Copy-Item "assets/fonts/Inter-LICENSE.txt" $portableDir
 Copy-Item "assets/fonts/SourceSerif4-LICENSE.md" $portableDir
-Copy-Item "notes/Bem-vindo.md" $notesInsidePortable
 
 # --- 7. Zip -------------------------------------------------------------------
 
